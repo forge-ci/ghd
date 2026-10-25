@@ -1,3 +1,4 @@
+<!-- Not README.md: GitHub would show .github/README.md instead of the root README on the repo page. -->
 # `.github/`
 
 GitHub-specific metadata. Kept deliberately thin per
