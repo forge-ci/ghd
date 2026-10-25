@@ -15,8 +15,41 @@ pub fn parse(
     args: &[&str],
     read_file: impl Fn(&str) -> io::Result<String>,
 ) -> io::Result<GraphqlRequest> {
-    let _ = (args, read_file);
-    Err(invalid("not implemented".into()))
+    let mut query = None;
+    let mut variables = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let (typed, pair) = match *arg {
+            "-f" | "--raw-field" => (false, it.next().copied()),
+            "-F" | "--field" => (true, it.next().copied()),
+            other if other.starts_with("-f") && other.len() > 2 => (false, Some(&other[2..])),
+            other if other.starts_with("-F") && other.len() > 2 => (true, Some(&other[2..])),
+            other => {
+                return Err(invalid(format!(
+                    "unsupported argument {other:?}; ghd api graphql takes -f/-F name=value"
+                )));
+            }
+        };
+        let pair = pair.ok_or_else(|| invalid(format!("{arg} needs name=value")))?;
+        let (name, value) = pair
+            .split_once('=')
+            .ok_or_else(|| invalid(format!("{pair:?} is not name=value")))?;
+        let value = match value.strip_prefix('@') {
+            Some(path) if typed => read_file(path)?,
+            _ => value.to_string(),
+        };
+        if name == "query" {
+            query = Some(value);
+        } else {
+            variables.push(GraphqlVariable {
+                name: name.into(),
+                value,
+                typed,
+            });
+        }
+    }
+    let query = query.ok_or_else(|| invalid("-f query=... is required".into()))?;
+    Ok(GraphqlRequest { query, variables })
 }
 
 /// `ghd api graphql ...`: print the body; fail (exit 1) when it has errors.
@@ -60,14 +93,27 @@ mod tests {
     #[test]
     fn query_and_fields_follow_gh() {
         let req = parse(
-            &["-f", "query=query($n:Int!){x}", "-F", "n=3", "--raw-field", "s=3", "--field", "b=true"],
+            &[
+                "-f",
+                "query=query($n:Int!){x}",
+                "-F",
+                "n=3",
+                "--raw-field",
+                "s=3",
+                "--field",
+                "b=true",
+            ],
             no_file,
         )
         .expect("parses");
         assert_eq!(req.query, "query($n:Int!){x}");
         assert_eq!(
             req.variables,
-            [var("n", "3", true), var("s", "3", false), var("b", "true", true)]
+            [
+                var("n", "3", true),
+                var("s", "3", false),
+                var("b", "true", true)
+            ]
         );
     }
 

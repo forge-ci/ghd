@@ -57,12 +57,19 @@ pr_view("talos-hq/clud", 2138, ["state", "mergeable"])
 
 ```text
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
+ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
 ghd stats                                           what the daemon saved
 ghd daemon                                          run the daemon (auto-started)
 ghd --version | --help
 ```
 
 - Without `-R`, the repository comes from the `origin` remote, as with `gh`.
+- `ghd api graphql` takes gh's `-f` (string) and `-F` (typed, `@file`)
+  fields and prints GitHub's body. Identical concurrent queries make one
+  upstream call, and an answer is reused for the fresh window
+  (`GHD_FRESH_MS`, 2 s), which is what agents' re-check loops hit.
+  Mutations always go upstream and clear the query cache. An `errors`
+  body is printed, and the command exits 1, as with gh.
 - `GHD_DEBUG=1` prints which step answered each read.
 - The daemon starts itself on first use. One start lock means concurrent
   cold clients start exactly one daemon.
