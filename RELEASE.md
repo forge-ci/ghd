@@ -13,12 +13,12 @@ The rest happens on its own:
 
 ```
 push to main (bump)
-  └─ release-auto.yml  prepare ── "candidate" ──► gh workflow run ci.yml -f sha=<bump>
+  └─ auto-release.yml  prepare ── "candidate" ──► gh workflow run ci.yml -f sha=<bump>
 ci.yml release flow (workflow_dispatch, titled "release <sha>")
   release-guard → every platform wheel → smokes → release-verify → publish (OIDC proof)
-  └─ release-handoff ──► gh workflow run release-auto.yml
+  └─ release-handoff ──► gh workflow run auto-release.yml
                            -f candidate_sha=<bump> -f full_ci_run_id=<this run>
-release-auto.yml  prepare ── "publish" (run checked through the API)
+auto-release.yml  prepare ── "publish" (run checked through the API)
   ├─ github-release: tag v<version> at <bump>, attach wheels + sdist
   └─ publish:        the same bytes → PyPI (trusted publishing)
 ```
@@ -50,7 +50,7 @@ release-auto.yml  prepare ── "publish" (run checked through the API)
   directly. A tag that already exists is never overwritten.
 
   ```sh
-  gh workflow run release-auto.yml -f candidate_sha=<bump sha> -f full_ci_run_id=<green run id>
+  gh workflow run auto-release.yml -f candidate_sha=<bump sha> -f full_ci_run_id=<green run id>
   ```
 
 ## One-time setup (repository owner)
@@ -58,7 +58,7 @@ release-auto.yml  prepare ── "publish" (run checked through the API)
 | where | what |
 |---|---|
 | GitHub → Settings → Environments | create `pypi` and restrict its deployment branches to `main` (ci-lint SEC-006) |
-| PyPI → `ghd` → Publishing | add a trusted publisher: owner `forge-ci`, repository `ghd`, workflow `release-auto.yml`, environment `pypi` |
+| PyPI → `ghd` → Publishing | add a trusted publisher: owner `forge-ci`, repository `ghd`, workflow `auto-release.yml`, environment `pypi` |
 | GitHub → Settings → Actions | allow GitHub Actions to create releases (the `contents: write` token on `github-release`) |
 
 No repository or environment secrets exist or are needed (ci-lint SEC-005).

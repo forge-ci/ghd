@@ -1099,7 +1099,7 @@ jobs:
 
   # Automatic release hop 2 of 3 (ci/auto_release.py): once this
   # release-flow dispatch has verified its dist and proved the OIDC
-  # identity, hand the candidate to release-auto.yml, which publishes
+  # identity, hand the candidate to auto-release.yml, which publishes
   # this run's `release-dist-verified` by run id.
   release-handoff:
     name: release-handoff
@@ -1117,7 +1117,7 @@ jobs:
           ref: ${{ github.event.inputs.sha }}
           persist-credentials: false
 
-      - name: Dispatch release-auto.yml for this verified candidate
+      - name: Dispatch auto-release.yml for this verified candidate
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

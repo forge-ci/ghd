@@ -248,7 +248,7 @@ max-age-hours  = 24
 
 # ── Allowlists ───────────────────────────────────────────────────────────────
 [allow]
-workflows         = { "ci.yml" = ["pull_request", "push:main", "schedule", "workflow_dispatch"], "ci-pre.yml" = ["workflow_call"], "release-auto.yml" = ["push:main", "workflow_dispatch"] }
+workflows         = { "ci.yml" = ["pull_request", "push:main", "schedule", "workflow_dispatch"], "ci-pre.yml" = ["workflow_call"], "auto-release.yml" = ["push:main", "workflow_dispatch"] }
 actions           = ["actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/cache", "zackees/setup-soldr", "astral-sh/setup-uv", "pypa/gh-action-pypi-publish"]
 # "plan" (round-4B): the wrapper's save-cache input must be an expression
 # derived from the precheck plan (needs.precheck.outputs.cache_save, passed

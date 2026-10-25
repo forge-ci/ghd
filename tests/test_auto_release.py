@@ -100,7 +100,11 @@ def test_non_main_ref_never_releases() -> None:
 
 
 def test_name_reservation_is_never_released() -> None:
-    assert run(show=repo("0.0.0", None)).action == "none"
+    assert run(show=repo("0.0.0", "0.0.0")).action == "none"
+
+
+def test_initial_commit_is_not_a_bump() -> None:
+    assert run(show=repo("0.1.0", None)).action == "none"
 
 
 def test_pyproject_version_drift_fails_closed() -> None:

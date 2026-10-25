@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Automatic release: a version bump on main ships itself.
 
-    python3 ci/auto_release.py detect             # release-auto.yml `prepare`
+    python3 ci/auto_release.py detect             # auto-release.yml `prepare`
     python3 ci/auto_release.py dispatch-candidate # prepare: start the release flow
     python3 ci/auto_release.py handoff            # ci.yml `release-handoff`
-    python3 ci/auto_release.py github-release     # release-auto.yml `github-release`
-    python3 ci/auto_release.py prune-dist         # release-auto.yml `publish`
+    python3 ci/auto_release.py github-release     # auto-release.yml `github-release`
+    python3 ci/auto_release.py prune-dist         # auto-release.yml `publish`
 
 The chain (no `workflow_run`, SEC-003; every hop is an explicit dispatch):
 
 1. A **push** to main that changes `[workspace.package].version` runs
-   `release-auto.yml`. `detect` says ``candidate``; `dispatch-candidate`
+   `auto-release.yml`. `detect` says ``candidate``; `dispatch-candidate`
    dispatches `ci.yml` with ``sha=<bump commit>``: the full release flow
    (every platform wheel, smokes, ``ci-lint release verify``), which
    uploads ``release-dist-verified``.
 2. That run's last job, `release-handoff`, runs only once release-verify
-   and the OIDC proof succeeded, and dispatches `release-auto.yml` with
+   and the OIDC proof succeeded, and dispatches `auto-release.yml` with
    ``candidate_sha`` and ``full_ci_run_id`` (its own run id).
 3. `detect` checks that run through the API (ci.yml, workflow_dispatch,
    titled ``release <sha>``, release-verify green) and says ``publish``:
@@ -23,7 +23,7 @@ The chain (no `workflow_run`, SEC-003; every hop is an explicit dispatch):
    same bytes to PyPI over OIDC. The dist is downloaded by run id and
    never rebuilt (REL-005).
 
-A maintainer can run step 3 by hand: dispatch `release-auto.yml` with a
+A maintainer can run step 3 by hand: dispatch `auto-release.yml` with a
 candidate sha and the id of a green release-flow run for it.
 
 Fails closed: any git/API error raises rather than guessing. Stdlib only,
@@ -93,7 +93,14 @@ def _candidate(
             raise ValueError(f"bad head sha {head_sha!r}")
         version = workspace_version(show(head_sha, "Cargo.toml"))
         parent = show(f"{head_sha}^", "Cargo.toml")
-        if parent is not None and workspace_version(parent) == version:
+        # A root commit is the repository's creation, not a bump: the first
+        # release is cut by bumping, or by dispatching auto-release.yml.
+        if parent is None:
+            return Decision(
+                "none",
+                reason=f"{head_sha[:12]} has no parent Cargo.toml (initial commit)",
+            )
+        if workspace_version(parent) == version:
             return Decision(
                 "none", reason=f"version {version} unchanged by {head_sha[:12]}"
             )
@@ -254,7 +261,7 @@ def cmd_handoff() -> None:
     _gh(
         "workflow",
         "run",
-        "release-auto.yml",
+        "auto-release.yml",
         "--ref",
         "main",
         "-f",
@@ -262,7 +269,7 @@ def cmd_handoff() -> None:
         "-f",
         f"full_ci_run_id={run_id}",
     )
-    print(f"auto_release: handed {sha} (run {run_id}) to release-auto.yml")
+    print(f"auto_release: handed {sha} (run {run_id}) to auto-release.yml")
 
 
 def _dists(dist: Path) -> list[Path]:

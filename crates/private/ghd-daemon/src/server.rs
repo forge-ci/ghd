@@ -20,8 +20,8 @@ use prost::Message;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_FRESH_FOR: Duration = Duration::from_secs(2);
