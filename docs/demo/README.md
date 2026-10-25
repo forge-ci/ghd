@@ -12,7 +12,7 @@ that can be regenerated.
 
 | file | what it is |
 |---|---|
-| `demo.sh` | the scripted session: real `ghd` and `gh` commands against `talos-hq/clud` |
+| `demo.py` | the scripted session: real `ghd` and `gh` commands against `talos-hq/clud` |
 | `ghd.cast` | the recording, as an asciicast v2 file (the source of truth for both outputs) |
 | `to_cast.py` | `script(1)` timing + typescript -> `ghd.cast`, typing each command out |
 | `to_gif.py` | `ghd.cast` -> animated GIF, drawn frame by frame with Pillow and JetBrains Mono |
@@ -35,7 +35,7 @@ that can be regenerated.
    second is served `fresh` in a few milliseconds.
 8. The Python binding reading through the same cache.
 
-`demo.sh` sets `GHD_FRESH_MS=400` so the second round falls outside the
+`demo.py` sets `GHD_FRESH_MS=400` so the second round falls outside the
 fresh window. The default is 2 s.
 
 ## Regenerating
@@ -45,7 +45,7 @@ installed `ghd` (`./test` installs it into `.venv`). From the repo root:
 
 ```sh
 # 1. record (script(1) from util-linux)
-(cd docs/demo && COLUMNS=100 LINES=40 script -q -T timing.log -O session.log -c ./demo.sh)
+(cd docs/demo && COLUMNS=100 LINES=40 script -q -T timing.log -O session.log -c "uv run --no-project --script demo.py")
 # 2. typescript -> asciicast
 uv run --no-project --script docs/demo/to_cast.py docs/demo
 # 3. asciicast -> GIF (Pillow; any JetBrains Mono TTF directory)
