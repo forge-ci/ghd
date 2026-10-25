@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A recorded terminal session of ghd serving concurrent gh pr view reads from cache.">
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
+</head>
+<body>
+<title>ghd in action</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column — thesis, the terminal as the hero, then three measured facts and the chapter list. */
+:root {
+  --bg: #f3f5f2; --fg: #17201b; --muted: #5b6760; --line: #d5dbd6;
+  --accent: #1f7a4d; --panel: #ffffff;
+  --term-bg: #0f1512; --term-fg: #d7e2db; --term-dim: #7f8f86; --term-green: #6fdc9b; --term-cyan: #6cc7d6;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0b100d; --fg: #e3ebe5; --muted: #95a39a; --line: #24302a; --accent: #6fdc9b; --panel: #121a16; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #0b100d; --fg: #e3ebe5; --muted: #95a39a; --line: #24302a; --accent: #6fdc9b; --panel: #121a16; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 40px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 28px; }
+h1 { font: 700 clamp(2rem, 5vw, 3rem)/1.05 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h1 code { font: inherit; color: var(--accent); }
+.lede { margin: 10px 0 0; color: var(--muted); max-width: 62ch; }
+.term { background: var(--term-bg); border-radius: 10px; overflow: hidden; border: 1px solid var(--line); min-width: 0; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #1f2a24; flex-wrap: wrap; }
+.bar .name { font: 600 12px var(--mono); color: var(--term-dim); margin-right: auto; }
+.bar button { font: 500 13px var(--body); color: var(--term-fg); background: #1a2420; border: 1px solid #2a3832; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.bar button:hover { border-color: var(--term-green); }
+.bar button:focus-visible { outline: 2px solid var(--term-green); outline-offset: 2px; }
+.bar button[aria-pressed="true"] { border-color: var(--term-green); color: var(--term-green); }
+.screen { margin: 0; padding: 16px 18px; height: min(62vh, 560px); overflow: auto; font: 13px/1.5 var(--mono); color: var(--term-fg); white-space: pre; }
+.b { font-weight: 600; } .c32 { color: var(--term-green); } .c36 { color: var(--term-cyan); }
+.cursor { display: inline-block; width: 0.6em; background: var(--term-green); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+.progress { height: 3px; background: #1a2420; } .progress i { display: block; height: 100%; width: 0; background: var(--term-green); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.fact { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.fact .n { font: 700 2rem/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.fact .n small { font: 500 0.95rem var(--body); color: var(--muted); }
+.fact p { margin: 6px 0 0; color: var(--muted); font-size: 0.95rem; }
+h2 { font: 600 1.25rem var(--display); margin: 0 0 10px; }
+ol.chapters { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+ol.chapters button { width: 100%; text-align: left; display: grid; grid-template-columns: 4.5em 1fr; gap: 12px; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: 15px var(--body); cursor: pointer; }
+ol.chapters button:hover, ol.chapters button:focus-visible { background: var(--panel); outline: none; box-shadow: inset 0 0 0 1px var(--line); }
+ol.chapters .t { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.note { color: var(--muted); font-size: 0.9rem; max-width: 70ch; margin: 0; }
+.note code, .fact code { font: 0.9em var(--mono); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1><code>ghd</code> in action</h1>
+    <p class="lede">A real terminal session, recorded 2026-10-24 against <code>talos-hq/clud</code> on GitHub: ten agents reading pull requests at once through the ghd daemon, then again a moment later, and the same read through plain <code>gh</code> for comparison.</p>
+  </header>
+
+  <section class="term" aria-label="Recorded terminal session">
+    <div class="bar">
+      <span class="name">bash — ghd demo</span>
+      <button id="play" type="button">Pause</button>
+      <button id="restart" type="button">Restart</button>
+      <button id="speed" type="button" aria-pressed="false">Speed 1×</button>
+    </div>
+    <div class="progress"><i id="prog"></i></div>
+    <pre class="screen" id="screen" tabindex="0"></pre>
+  </section>
+
+  <section class="facts" aria-label="Measured in this recording">
+    <div class="fact"><div class="n">3 <small>GraphQL points</small></div><p>for 11 cold reads across 6 PRs: requests for one repo that arrive together share one aliased query. <code>gh</code> spends one query per call, so 11.</p></div>
+    <div class="fact"><div class="n">0 <small>points</small></div><p>for the second round of 10 reads: 5 proven unchanged by ETag <code>304</code>s, which GitHub does not charge, and 5 served fresh.</p></div>
+    <div class="fact"><div class="n">5 ms <small>vs 476 ms</small></div><p>a fresh warm read through ghd, against the same read through <code>gh</code>. A read that needs revalidation costs one REST round trip, about 0.4 s.</p></div>
+  </section>
+
+  <section>
+    <h2>Chapters</h2>
+    <ol class="chapters" id="chapters"></ol>
+  </section>
+
+  <p class="note">Recorded with <code>script(1)</code>; the player replays its real output bytes. Pauses longer than 1.2 s are shortened, and each <code>time</code> line shows the real duration. The demo shortens the fresh window to 400 ms (<code>GHD_FRESH_MS</code>) so the second round falls outside it; the default is 2 s.</p>
+</div>
+
+<script id="cast" type="application/json">{"events": [[0.013, "\r\n\u001b[1;36m# ghd: a cached, batched gateway for gh reads\u001b[0m\r\n\u001b[1;32m$\u001b[0m "], [0.385, "g"], [0.407, "h"], [0.429, "d"], [0.451, " "], [0.473, "-"], [0.495, "-"], [0.517, "v"], [0.539, "e"], [0.561, "r"], [0.583, "s"], [0.605, "i"], [0.627, "o"], [0.649, "n"], [0.899, "\r\n"], [0.907, "ghd 0.1.0 (linux)\r\n"], [0.907, "\r\n\u001b[1;36m# cold: the first read starts the daemon and fetches over GraphQL\u001b[0m\r\n\u001b[1;32m$\u001b[0m "], [1.279, "t"], [1.301, "i"], [1.323, "m"], [1.345, "e"], [1.367, " "], [1.389, "g"], [1.411, "h"], [1.433, "d"], [1.455, " "], [1.477, "p"], [1.499, "r"], [1.521, " "], [1.543, "v"], [1.565, "i"], [1.587, "e"], [1.609, "w"], [1.631, " "], [1.653, "2"], [1.675, "1"], [1.697, "3"], [1.719, "8"], [1.741, " "], [1.763, "-"], [1.785, "R"], [1.807, " "], [1.829, "t"], [1.851, "a"], [1.873, "l"], [1.895, "o"], [1.917, "s"], [1.939, "-"], [1.961, "h"], [1.983, "q"], [2.005, "/"], [2.027, "c"], [2.049, "l"], [2.071, "u"], [2.093, "d"], [2.115, " "], [2.137, "-"], [2.159, "-"], [2.181, "j"], [2.203, "s"], [2.225, "o"], [2.247, "n"], [2.269, " "], [2.291, "n"], [2.313, "u"], [2.335, "m"], [2.357, "b"], [2.379, "e"], [2.401, "r"], [2.423, ","], [2.445, "s"], [2.467, "t"], [2.489, "a"], [2.511, "t"], [2.533, "e"], [2.555, ","], [2.577, "t"], [2.599, "i"], [2.621, "t"], [2.643, "l"], [2.665, "e"], [2.687, ","], [2.709, "m"], [2.731, "e"], [2.753, "r"], [2.775, "g"], [2.797, "e"], [2.819, "d"], [2.841, "A"], [2.863, "t"], [3.113, "\r\n"], [4.283, "{\r\n  \"mergedAt\": \"2026-10-25T02:51:50Z\",\r\n  \"number\": 2138,\r\n  \"state\": \"MERGED\",\r\n  \"title\": \"ci: main push reuses a locally gated PR through its queue run (#2137)\"\r\n}\r\n"], [4.283, "\r\nreal\t0m1.166s\r\nuser\t0m0.001s\r\n"], [4.283, "sys\t0m0.004s\r\n"], [4.284, "\r\n\u001b[1;36m# 10 agents at once: 5 PRs, each asked twice\u001b[0m\r\n"], [4.284, "\u001b[1;32m$\u001b[0m "], [4.656, "p"], [4.678, "r"], [4.7, "i"], [4.722, "n"], [4.744, "t"], [4.766, "f"], [4.788, " "], [4.81, "'"], [4.832, "%"], [4.854, "s"], [4.876, "\\"], [4.898, "n"], [4.92, "'"], [4.942, " "], [4.964, "2"], [4.986, "1"], [5.008, "3"], [5.03, "5"], [5.052, " "], [5.074, "2"], [5.096, "1"], [5.118, "3"], [5.14, "3"], [5.162, " "], [5.184, "2"], [5.206, "1"], [5.228, "3"], [5.25, "2"], [5.272, " "], [5.294, "2"], [5.316, "1"], [5.338, "3"], [5.36, "1"], [5.382, " "], [5.404, "2"], [5.426, "1"], [5.448, "2"], [5.47, "8"], [5.492, " "], [5.514, "2"], [5.536, "1"], [5.558, "3"], [5.58, "5"], [5.602, " "], [5.624, "2"], [5.646, "1"], [5.668, "3"], [5.69, "3"], [5.712, " "], [5.734, "2"], [5.756, "1"], [5.778, "3"], [5.8, "2"], [5.822, " "], [5.844, "2"], [5.866, "1"], [5.888, "3"], [5.91, "1"], [5.932, " "], [5.954, "2"], [5.976, "1"], [5.998, "2"], [6.02, "8"], [6.042, " "], [6.064, "|"], [6.086, " "], [6.108, "G"], [6.13, "H"], [6.152, "D"], [6.174, "_"], [6.196, "D"], [6.218, "E"], [6.24, "B"], [6.262, "U"], [6.284, "G"], [6.306, "="], [6.328, "1"], [6.35, " "], [6.372, "x"], [6.394, "a"], [6.416, "r"], [6.438, "g"], [6.46, "s"], [6.482, " "], [6.504, "-"], [6.526, "P"], [6.548, "1"], [6.57, "0"], [6.592, " "], [6.614, "-"], [6.636, "I"], [6.658, "{"], [6.68, "}"], [6.702, " "], [6.724, "g"], [6.746, "h"], [6.768, "d"], [6.79, " "], [6.812, "p"], [6.834, "r"], [6.856, " "], [6.878, "v"], [6.9, "i"], [6.922, "e"], [6.944, "w"], [6.966, " "], [6.988, "{"], [7.01, "}"], [7.032, " "], [7.054, "-"], [7.076, "R"], [7.098, " "], [7.12, "t"], [7.142, "a"], [7.164, "l"], [7.186, "o"], [7.208, "s"], [7.23, "-"], [7.252, "h"], [7.274, "q"], [7.296, "/"], [7.318, "c"], [7.34, "l"], [7.362, "u"], [7.384, "d"], [7.406, " "], [7.428, "-"], [7.45, "-"], [7.472, "j"], [7.494, "s"], [7.516, "o"], [7.538, "n"], [7.56, " "], [7.582, "s"], [7.604, "t"], [7.626, "a"], [7.648, "t"], [7.67, "e"], [7.692, " "], [7.714, "2"], [7.736, ">"], [7.758, "&"], [7.78, "1"], [7.802, " "], [7.824, ">"], [7.846, "/"], [7.868, "d"], [7.89, "e"], [7.912, "v"], [7.934, "/"], [7.956, "n"], [7.978, "u"], [8.0, "l"], [8.022, "l"], [8.044, " "], [8.066, "|"], [8.088, " "], [8.11, "s"], [8.132, "o"], [8.154, "r"], [8.176, "t"], [8.198, " "], [8.22, "|"], [8.242, " "], [8.264, "u"], [8.286, "n"], [8.308, "i"], [8.33, "q"], [8.352, " "], [8.374, "-"], [8.396, "c"], [8.646, "\r\n"], [9.762, "      5 ghd: fetched\r\n      5 ghd: fresh\r\n"], [9.763, "\u001b[1;32m$\u001b[0m "], [10.135, "g"], [10.157, "h"], [10.179, "d"], [10.201, " "], [10.223, "s"], [10.245, "t"], [10.267, "a"], [10.289, "t"], [10.311, "s"], [10.561, "\r\n"], [10.57, "{\r\n  \"core_remaining\": 4960,\r\n  \"graphql_points_spent\": 3,\r\n  \"graphql_prs_fetched\": 6,\r\n  \"graphql_queries\": 3,\r\n  \"graphql_remaining\": 4936,\r\n  \"reads\": 11,\r\n  \"sentinel_200\": 6,\r\n  \"sentinel_304_free\": 0,\r\n  \"served_fresh\": 5,\r\n  \"uptime_secs\": 2\r\n}\r\n"], [10.571, "\r\n\u001b[1;36m# meanwhile, the same read through plain gh\u001b[0m\r\n"], [10.571, "\u001b[1;32m$\u001b[0m "], [10.943, "t"], [10.965, "i"], [10.987, "m"], [11.009, "e"], [11.031, " "], [11.053, "g"], [11.075, "h"], [11.097, " "], [11.119, "p"], [11.141, "r"], [11.163, " "], [11.185, "v"], [11.207, "i"], [11.229, "e"], [11.251, "w"], [11.273, " "], [11.295, "2"], [11.317, "1"], [11.339, "3"], [11.361, "8"], [11.383, " "], [11.405, "-"], [11.427, "R"], [11.449, " "], [11.471, "t"], [11.493, "a"], [11.515, "l"], [11.537, "o"], [11.559, "s"], [11.581, "-"], [11.603, "h"], [11.625, "q"], [11.647, "/"], [11.669, "c"], [11.691, "l"], [11.713, "u"], [11.735, "d"], [11.757, " "], [11.779, "-"], [11.801, "-"], [11.823, "j"], [11.845, "s"], [11.867, "o"], [11.889, "n"], [11.911, " "], [11.933, "s"], [11.955, "t"], [11.977, "a"], [11.999, "t"], [12.021, "e"], [12.043, " "], [12.065, ">"], [12.087, "/"], [12.109, "d"], [12.131, "e"], [12.153, "v"], [12.175, "/"], [12.197, "n"], [12.219, "u"], [12.241, "l"], [12.263, "l"], [12.513, "\r\n"], [12.993, "\r\nreal\t0m0.476s\r\nuser\t0m0.077s\r\nsys\t0m0.036s\r\n"], [12.994, "\r\n\u001b[1;36m# the 10 agents ask again: freshness proven by free ETag 304s\u001b[0m\r\n"], [12.994, "\u001b[1;32m$\u001b[0m "], [13.366, "p"], [13.388, "r"], [13.41, "i"], [13.432, "n"], [13.454, "t"], [13.476, "f"], [13.498, " "], [13.52, "'"], [13.542, "%"], [13.564, "s"], [13.586, "\\"], [13.608, "n"], [13.63, "'"], [13.652, " "], [13.674, "2"], [13.696, "1"], [13.718, "3"], [13.74, "5"], [13.762, " "], [13.784, "2"], [13.806, "1"], [13.828, "3"], [13.85, "3"], [13.872, " "], [13.894, "2"], [13.916, "1"], [13.938, "3"], [13.96, "2"], [13.982, " "], [14.004, "2"], [14.026, "1"], [14.048, "3"], [14.07, "1"], [14.092, " "], [14.114, "2"], [14.136, "1"], [14.158, "2"], [14.18, "8"], [14.202, " "], [14.224, "2"], [14.246, "1"], [14.268, "3"], [14.29, "5"], [14.312, " "], [14.334, "2"], [14.356, "1"], [14.378, "3"], [14.4, "3"], [14.422, " "], [14.444, "2"], [14.466, "1"], [14.488, "3"], [14.51, "2"], [14.532, " "], [14.554, "2"], [14.576, "1"], [14.598, "3"], [14.62, "1"], [14.642, " "], [14.664, "2"], [14.686, "1"], [14.708, "2"], [14.73, "8"], [14.752, " "], [14.774, "|"], [14.796, " "], [14.818, "G"], [14.84, "H"], [14.862, "D"], [14.884, "_"], [14.906, "D"], [14.928, "E"], [14.95, "B"], [14.972, "U"], [14.994, "G"], [15.016, "="], [15.038, "1"], [15.06, " "], [15.082, "x"], [15.104, "a"], [15.126, "r"], [15.148, "g"], [15.17, "s"], [15.192, " "], [15.214, "-"], [15.236, "P"], [15.258, "1"], [15.28, "0"], [15.302, " "], [15.324, "-"], [15.346, "I"], [15.368, "{"], [15.39, "}"], [15.412, " "], [15.434, "g"], [15.456, "h"], [15.478, "d"], [15.5, " "], [15.522, "p"], [15.544, "r"], [15.566, " "], [15.588, "v"], [15.61, "i"], [15.632, "e"], [15.654, "w"], [15.676, " "], [15.698, "{"], [15.72, "}"], [15.742, " "], [15.764, "-"], [15.786, "R"], [15.808, " "], [15.83, "t"], [15.852, "a"], [15.874, "l"], [15.896, "o"], [15.918, "s"], [15.94, "-"], [15.962, "h"], [15.984, "q"], [16.006, "/"], [16.028, "c"], [16.05, "l"], [16.072, "u"], [16.094, "d"], [16.116, " "], [16.138, "-"], [16.16, "-"], [16.182, "j"], [16.204, "s"], [16.226, "o"], [16.248, "n"], [16.27, " "], [16.292, "s"], [16.314, "t"], [16.336, "a"], [16.358, "t"], [16.38, "e"], [16.402, " "], [16.424, "2"], [16.446, ">"], [16.468, "&"], [16.49, "1"], [16.512, " "], [16.534, ">"], [16.556, "/"], [16.578, "d"], [16.6, "e"], [16.622, "v"], [16.644, "/"], [16.666, "n"], [16.688, "u"], [16.71, "l"], [16.732, "l"], [16.754, " "], [16.776, "|"], [16.798, " "], [16.82, "s"], [16.842, "o"], [16.864, "r"], [16.886, "t"], [16.908, " "], [16.93, "|"], [16.952, " "], [16.974, "u"], [16.996, "n"], [17.018, "i"], [17.04, "q"], [17.062, " "], [17.084, "-"], [17.106, "c"], [17.356, "\r\n"], [17.823, "      5 ghd: fresh\r\n      5 ghd: revalidated\r\n"], [17.824, "\u001b[1;32m$\u001b[0m "], [18.196, "g"], [18.218, "h"], [18.24, "d"], [18.262, " "], [18.284, "s"], [18.306, "t"], [18.328, "a"], [18.35, "t"], [18.372, "s"], [18.622, "\r\n"], [18.631, "{\r\n  \"core_remaining\": 4960,\r\n  \"graphql_points_spent\": 3,\r\n  \"graphql_prs_fetched\": 6,\r\n  \"graphql_queries\": 3,\r\n  \"graphql_remaining\": 4936,\r\n  \"reads\": 21,\r\n  \"sentinel_200\": 6,\r\n  \"sentinel_304_free\": 5,\r\n  \"served_fresh\": 10,\r\n  \"uptime_secs\": 3\r\n}\r\n"], [18.631, "\r\n\u001b[1;36m# warm reads: the first revalidates (one REST round trip), the next is served fresh\u001b[0m\r\n"], [18.631, "\u001b[1;32m$\u001b[0m "], [19.003, "t"], [19.025, "i"], [19.047, "m"], [19.069, "e"], [19.091, " "], [19.113, "G"], [19.135, "H"], [19.157, "D"], [19.179, "_"], [19.201, "D"], [19.223, "E"], [19.245, "B"], [19.267, "U"], [19.289, "G"], [19.311, "="], [19.333, "1"], [19.355, " "], [19.377, "g"], [19.399, "h"], [19.421, "d"], [19.443, " "], [19.465, "p"], [19.487, "r"], [19.509, " "], [19.531, "v"], [19.553, "i"], [19.575, "e"], [19.597, "w"], [19.619, " "], [19.641, "2"], [19.663, "1"], [19.685, "3"], [19.707, "8"], [19.729, " "], [19.751, "-"], [19.773, "R"], [19.795, " "], [19.817, "t"], [19.839, "a"], [19.861, "l"], [19.883, "o"], [19.905, "s"], [19.927, "-"], [19.949, "h"], [19.971, "q"], [19.993, "/"], [20.015, "c"], [20.037, "l"], [20.059, "u"], [20.081, "d"], [20.103, " "], [20.125, "-"], [20.147, "-"], [20.169, "j"], [20.191, "s"], [20.213, "o"], [20.235, "n"], [20.257, " "], [20.279, "s"], [20.301, "t"], [20.323, "a"], [20.345, "t"], [20.367, "e"], [20.617, "\r\n"], [21.037, "ghd: revalidated\r\n{\r\n  \"state\": \"MERGED\"\r\n}\r\n"], [21.038, "\r\nreal\t0m0.416s\r\nuser\t0m0.001s\r\nsys\t0m0.003s\r\n"], [21.039, "\u001b[1;32m$\u001b[0m "], [21.411, "t"], [21.433, "i"], [21.455, "m"], [21.477, "e"], [21.499, " "], [21.521, "G"], [21.543, "H"], [21.565, "D"], [21.587, "_"], [21.609, "D"], [21.631, "E"], [21.653, "B"], [21.675, "U"], [21.697, "G"], [21.719, "="], [21.741, "1"], [21.763, " "], [21.785, "g"], [21.807, "h"], [21.829, "d"], [21.851, " "], [21.873, "p"], [21.895, "r"], [21.917, " "], [21.939, "v"], [21.961, "i"], [21.983, "e"], [22.005, "w"], [22.027, " "], [22.049, "2"], [22.071, "1"], [22.093, "3"], [22.115, "8"], [22.137, " "], [22.159, "-"], [22.181, "R"], [22.203, " "], [22.225, "t"], [22.247, "a"], [22.269, "l"], [22.291, "o"], [22.313, "s"], [22.335, "-"], [22.357, "h"], [22.379, "q"], [22.401, "/"], [22.423, "c"], [22.445, "l"], [22.467, "u"], [22.489, "d"], [22.511, " "], [22.533, "-"], [22.555, "-"], [22.577, "j"], [22.599, "s"], [22.621, "o"], [22.643, "n"], [22.665, " "], [22.687, "s"], [22.709, "t"], [22.731, "a"], [22.753, "t"], [22.775, "e"], [23.025, "\r\n"], [23.033, "ghd: fresh\r\n{\r\n  \"state\": \"MERGED\"\r\n}\r\n"], [23.034, "\r\nreal\t0m0.005s\r\nuser\t0m0.002s\r\nsys\t0m0.003s\r\n"], [23.035, "\r\n\u001b[1;36m# Python callers share the same cache\u001b[0m\r\n\u001b[1;32m$\u001b[0m "], [23.407, "p"], [23.429, "y"], [23.451, "t"], [23.473, "h"], [23.495, "o"], [23.517, "n"], [23.539, " "], [23.561, "-"], [23.583, "c"], [23.605, " "], [23.627, "\""], [23.649, "f"], [23.671, "r"], [23.693, "o"], [23.715, "m"], [23.737, " "], [23.759, "g"], [23.781, "h"], [23.803, "d"], [23.825, "."], [23.847, "b"], [23.869, "i"], [23.891, "n"], [23.913, "d"], [23.935, "i"], [23.957, "n"], [23.979, "g"], [24.001, "s"], [24.023, " "], [24.045, "i"], [24.067, "m"], [24.089, "p"], [24.111, "o"], [24.133, "r"], [24.155, "t"], [24.177, " "], [24.199, "p"], [24.221, "r"], [24.243, "_"], [24.265, "v"], [24.287, "i"], [24.309, "e"], [24.331, "w"], [24.353, ";"], [24.375, " "], [24.397, "p"], [24.419, "r"], [24.441, "i"], [24.463, "n"], [24.485, "t"], [24.507, "("], [24.529, "p"], [24.551, "r"], [24.573, "_"], [24.595, "v"], [24.617, "i"], [24.639, "e"], [24.661, "w"], [24.683, "("], [24.705, "'"], [24.727, "t"], [24.749, "a"], [24.771, "l"], [24.793, "o"], [24.815, "s"], [24.837, "-"], [24.859, "h"], [24.881, "q"], [24.903, "/"], [24.925, "c"], [24.947, "l"], [24.969, "u"], [24.991, "d"], [25.013, "'"], [25.035, ","], [25.057, " "], [25.079, "2"], [25.101, "1"], [25.123, "3"], [25.145, "8"], [25.167, ","], [25.189, " "], [25.211, "["], [25.233, "'"], [25.255, "s"], [25.277, "t"], [25.299, "a"], [25.321, "t"], [25.343, "e"], [25.365, "'"], [25.387, ","], [25.409, " "], [25.431, "'"], [25.453, "m"], [25.475, "e"], [25.497, "r"], [25.519, "g"], [25.541, "e"], [25.563, "a"], [25.585, "b"], [25.607, "l"], [25.629, "e"], [25.651, "'"], [25.673, "]"], [25.695, ")"], [25.717, ")"], [25.739, "\""], [25.989, "\r\n"], [27.157, "{'mergeable': 'UNKNOWN', 'state': 'MERGED'}\r\n"]], "chapters": [[0.0, "ghd: a cached, batched gateway for gh reads"], [0.9, "cold: the first read starts the daemon and fetches over GraphQL"], [4.3, "10 agents at once: 5 PRs, each asked twice"], [10.6, "meanwhile, the same read through plain gh"], [13.0, "the 10 agents ask again: freshness proven by free ETag 304s"], [18.6, "warm reads: the first revalidates (one REST round trip), the next is served fresh"], [23.0, "Python callers share the same cache"]]}</script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById("cast").textContent);
+  var events = data.events, total = events[events.length - 1][0];
+  var screen = document.getElementById("screen"), prog = document.getElementById("prog");
+  var playBtn = document.getElementById("play"), speedBtn = document.getElementById("speed");
+  var idx = 0, clock = 0, speed = 1, playing = true, last = null, cls = "";
+  var cursor = document.createElement("span"); cursor.className = "cursor"; cursor.textContent = " ";
+
+  function emit(text) {
+    var re = /\x1b\[([0-9;]*)m/g, m, at = 0;
+    while ((m = re.exec(text))) { put(text.slice(at, m.index)); sgr(m[1]); at = re.lastIndex; }
+    put(text.slice(at));
+  }
+  function sgr(codes) {
+    var parts = codes.split(";").filter(Boolean);
+    if (!parts.length || parts.indexOf("0") >= 0) { cls = ""; parts = parts.filter(function (p) { return p !== "0"; }); }
+    parts.forEach(function (p) { if (p === "1") cls += " b"; else if (p === "32" || p === "36") cls += " c" + p; });
+  }
+  function put(s) {
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "");
+    if (!s) return;
+    var span = document.createElement("span"); if (cls) span.className = cls.trim(); span.textContent = s;
+    screen.insertBefore(span, cursor);
+  }
+  function render(upTo) {
+    while (idx < events.length && events[idx][0] <= upTo) { emit(events[idx][1]); idx++; }
+    prog.style.width = Math.min(100, (upTo / total) * 100) + "%";
+    screen.scrollTop = screen.scrollHeight;
+  }
+  function reset() { screen.textContent = ""; screen.appendChild(cursor); idx = 0; clock = 0; cls = ""; }
+  function seek(t) { reset(); clock = t; render(t); }
+  function frame(now) {
+    if (playing) {
+      if (last !== null) clock += ((now - last) / 1000) * speed;
+      render(clock);
+      if (clock >= total) { playing = false; playBtn.textContent = "Replay"; }
+    }
+    last = now; requestAnimationFrame(frame);
+  }
+  playBtn.addEventListener("click", function () {
+    if (clock >= total) { seek(0); playing = true; }
+    else playing = !playing;
+    playBtn.textContent = playing ? "Pause" : "Play";
+  });
+  document.getElementById("restart").addEventListener("click", function () { seek(0); playing = true; playBtn.textContent = "Pause"; });
+  speedBtn.addEventListener("click", function () {
+    speed = speed === 1 ? 2 : speed === 2 ? 4 : 1;
+    speedBtn.textContent = "Speed " + speed + "×"; speedBtn.setAttribute("aria-pressed", String(speed !== 1));
+  });
+  var list = document.getElementById("chapters");
+  data.chapters.forEach(function (c) {
+    var li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = '<span class="t"></span><span></span>';
+    b.firstChild.textContent = c[0].toFixed(1) + " s"; b.lastChild.textContent = c[1];
+    b.addEventListener("click", function () { seek(Math.max(0, c[0] - 0.01)); playing = true; playBtn.textContent = "Pause"; screen.focus(); });
+    li.appendChild(b); list.appendChild(li);
+  });
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  reset();
+  if (reduce) { playing = false; render(total); playBtn.textContent = "Replay"; clock = total; }
+  requestAnimationFrame(frame);
+})();
+</script>
+
+</body>
+</html>
