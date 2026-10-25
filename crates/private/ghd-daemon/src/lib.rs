@@ -8,6 +8,7 @@
 //! Built on kernal-api only: its async engine, HTTP client/server, JSON and
 //! secure random. No crate here names tokio, reqwest or hyper.
 
+pub mod graphql;
 pub mod server;
 pub mod upstream;
 

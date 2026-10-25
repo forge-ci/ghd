@@ -8,10 +8,11 @@
 //! Each PR has its own async lock, so concurrent identical reads make one
 //! upstream round trip and the rest are served `fresh` behind it.
 
+use crate::graphql as gql;
 use crate::upstream::{Fields, Upstream};
 use ghd_core::endpoint::{self, Endpoint};
 use ghd_core::fields;
-use ghd_core::proto::{PrViewRequest, PrViewResponse};
+use ghd_core::proto::{GraphqlRequest, GraphqlResponse, PrViewRequest, PrViewResponse};
 use kernal_api::async_engine::{Mutex, RuntimeBuilder};
 use kernal_api::http_server::{self, Request, Response, Server};
 use kernal_api::json::{self, Layout, Value};
@@ -47,10 +48,18 @@ struct Entry {
 
 type Slot = Arc<Mutex<Option<Entry>>>;
 
+/// A cached `api graphql` answer: the response body and when it was fetched.
+type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
+
+/// Past this many cached queries, stale ones are dropped on insert.
+const GRAPHQL_CACHE_MAX: usize = 4096;
+
 struct State {
     token: String,
     upstream: Arc<Upstream>,
     cache: Mutex<HashMap<(String, String, u64), Slot>>,
+    graphql: Mutex<HashMap<Vec<u8>, GraphqlSlot>>,
+    graphql_fresh: AtomicU64,
     reads: AtomicU64,
     fresh: AtomicU64,
     started: Instant,
@@ -71,6 +80,8 @@ pub fn run() -> io::Result<()> {
             token: token.clone(),
             upstream: Arc::new(Upstream::new(gh_token, BATCH_WINDOW)?),
             cache: Mutex::new(HashMap::new()),
+            graphql: Mutex::new(HashMap::new()),
+            graphql_fresh: AtomicU64::new(0),
             reads: AtomicU64::new(0),
             fresh: AtomicU64::new(0),
             started: Instant::now(),
@@ -127,6 +138,7 @@ async fn route(state: &State, request: Request) -> Response {
         ("GET", "/v1/health") => text(200, "ok"),
         ("GET", "/v1/stats") => stats(state),
         ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
+        ("POST", "/v1/graphql") => graphql(state, request.body()).await,
         _ => text(404, "no such route"),
     }
 }
@@ -255,6 +267,76 @@ async fn read(
     Ok((fields, "fetched"))
 }
 
+fn graphql_reply(status: u16, message: &GraphqlResponse) -> Response {
+    Response::new(status, message.encode_to_vec())
+        .and_then(|r| r.with_header("content-type", "application/x-protobuf"))
+        .unwrap_or_default()
+}
+
+fn graphql_answer(json: Vec<u8>, source: &str) -> Response {
+    let error = gql::errors(&json).unwrap_or_default();
+    graphql_reply(
+        200,
+        &GraphqlResponse {
+            json,
+            source: source.into(),
+            error,
+        },
+    )
+}
+
+async fn graphql(state: &State, body: &[u8]) -> Response {
+    let failed = |status, error: String| {
+        graphql_reply(
+            status,
+            &GraphqlResponse {
+                error,
+                ..Default::default()
+            },
+        )
+    };
+    let Ok(req) = GraphqlRequest::decode(body) else {
+        return failed(400, "malformed request".into());
+    };
+    let upstream_body = match gql::body(&req.query, &req.variables) {
+        Ok(b) => b,
+        Err(e) => return failed(400, e),
+    };
+    if gql::is_mutation(&req.query) {
+        // A write: never cached, and no read after it may see an older answer.
+        state.graphql.lock().await.clear();
+        return match state.upstream.graphql_raw(&upstream_body).await {
+            Ok((_, json)) => graphql_answer(json, "fetched"),
+            Err(e) => failed(502, e),
+        };
+    }
+    let slot = {
+        let mut cache = state.graphql.lock().await;
+        if cache.len() >= GRAPHQL_CACHE_MAX {
+            cache.retain(|_, slot| Arc::strong_count(slot) > 1);
+        }
+        Arc::clone(cache.entry(upstream_body.clone()).or_default())
+    };
+    // One lock per query: concurrent identical calls wait for the first.
+    let mut entry = slot.lock().await;
+    if let Some((json, at)) = entry.as_ref()
+        && at.elapsed() < fresh_for()
+    {
+        state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
+        return graphql_answer(json.clone(), "fresh");
+    }
+    match state.upstream.graphql_raw(&upstream_body).await {
+        Ok((status, json)) => {
+            // Only a clean answer is reused; errors (rate limits) are not.
+            if status == 200 && gql::errors(&json).is_none() {
+                *entry = Some((json.clone(), Instant::now()));
+            }
+            graphql_answer(json, "fetched")
+        }
+        Err(e) => failed(502, e),
+    }
+}
+
 fn stats(state: &State) -> Response {
     let c = &state.upstream.counters;
     let n = |v: &AtomicU64| Value::Unsigned(v.load(Ordering::Relaxed));
@@ -270,6 +352,8 @@ fn stats(state: &State) -> Response {
     doc.insert("graphql_queries".into(), n(&c.graphql_queries));
     doc.insert("graphql_prs_fetched".into(), n(&c.graphql_prs));
     doc.insert("graphql_points_spent".into(), n(&c.graphql_cost));
+    doc.insert("api_graphql_upstream".into(), n(&c.graphql_passthrough));
+    doc.insert("api_graphql_served_fresh".into(), n(&state.graphql_fresh));
     doc.insert(
         "graphql_remaining".into(),
         Value::Signed(c.graphql_remaining.load(Ordering::Relaxed)),

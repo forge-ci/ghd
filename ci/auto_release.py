@@ -114,7 +114,7 @@ def _candidate(
     return Decision("none", reason=f"event {event!r} never releases")
 
 
-def decide(
+def decide(  # pylint: disable=too-many-arguments  # keyword-only inputs of one decision
     *,
     event: str,
     ref: str,

@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ci.auto_release import decide
+from ci.auto_release import decide  # pylint: disable=wrong-import-position
 
 SHA = "a" * 40
 MAIN = "refs/heads/main"
@@ -47,7 +47,7 @@ def green_run(
     )
 
 
-def run(*, event="push", ref=MAIN, show, released=(), fetch_run=None, run_id="42"):
+def run(*, event="push", ref=MAIN, show, released=(), fetch_run=None, run_id="42"):  # pylint: disable=too-many-arguments
     return decide(
         event=event,
         ref=ref,

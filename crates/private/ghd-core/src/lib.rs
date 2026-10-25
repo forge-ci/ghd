@@ -5,6 +5,7 @@
 //! - [`client`]: one std-only HTTP/1.1 call, starting the daemon if needed
 //! - [`cli`]: the gh-compatible command surface (`ghd pr view`, `ghd stats`)
 //! - [`fields`]: the `gh pr view --json` fields ghd can answer
+//! - [`graphql`]: `ghd api graphql`, gh's `-f`/`-F` argument shape
 //!
 //! No async runtime and no TLS live here, so a warm `ghd` invocation costs
 //! one loopback round trip. The daemon itself is `ghd-daemon`.
@@ -17,6 +18,7 @@ pub mod cli;
 pub mod client;
 pub mod endpoint;
 pub mod fields;
+pub mod graphql;
 pub mod proto;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.

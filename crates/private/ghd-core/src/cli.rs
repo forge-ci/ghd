@@ -11,6 +11,7 @@ ghd: a cached, batched, budget-aware gateway for gh reads
 
 usage:
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
+  ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
   ghd stats                                           what the daemon saved
   ghd daemon                                          run the daemon (auto-started)
   ghd --version | --help";
@@ -23,6 +24,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
         ["pr", "view", rest @ ..] => pr_view(rest),
+        ["api", "graphql", rest @ ..] => crate::graphql::run(rest),
         _ => Err(invalid(USAGE)),
     }
 }

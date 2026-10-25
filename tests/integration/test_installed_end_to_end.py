@@ -59,7 +59,7 @@ def test_python_binding_and_native_cli_print_the_same_banner() -> None:
 
 
 def test_banner_names_this_host() -> None:
-    assert f"({os_name()})" in bindings.version_banner()
+    assert f"({os_name()})" in str(bindings.version_banner())
 
 
 def test_native_cli_rejects_a_malformed_pr_view_without_the_network() -> None:

@@ -25,6 +25,8 @@ pub struct Counters {
     pub graphql_prs: AtomicU64,
     pub graphql_cost: AtomicU64,
     pub graphql_remaining: AtomicI64,
+    /// `api graphql` calls that went upstream.
+    pub graphql_passthrough: AtomicU64,
     pub core_remaining: AtomicI64,
 }
 
@@ -160,6 +162,39 @@ impl Upstream {
             .graphql_prs
             .fetch_add(batch.prs.len() as u64, Ordering::Relaxed);
         let _ = batch.done.send(Arc::new(result));
+    }
+
+    /// Send a caller's `/graphql` body as-is; `(status, response body)`.
+    pub async fn graphql_raw(&self, body: &[u8]) -> Result<(u16, Vec<u8>), String> {
+        let url = format!("{API}/graphql");
+        let headers = [
+            ("Authorization", self.auth.as_str()),
+            ("User-Agent", USER_AGENT),
+            ("Content-Type", "application/json"),
+        ];
+        let response = self
+            .http
+            .execute(Request {
+                method: Method::Post,
+                url: &url,
+                headers: &headers,
+                body,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status();
+        if let Some(left) =
+            header_str(&response, "x-ratelimit-remaining").and_then(|v| v.parse().ok())
+        {
+            self.counters
+                .graphql_remaining
+                .store(left, Ordering::Relaxed);
+        }
+        let bytes = response.into_bytes().await.map_err(|e| e.to_string())?;
+        self.counters
+            .graphql_passthrough
+            .fetch_add(1, Ordering::Relaxed);
+        Ok((status, bytes.to_vec()))
     }
 
     async fn graphql(&self, query: &str) -> Result<Value, String> {
