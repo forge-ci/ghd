@@ -1,0 +1,72 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Local bootstrap.
+
+Verifies the toolchain shape this repo expects:
+
+  - `uv` is on PATH (the only Python entry point).
+  - `soldr` is on PATH (the only Rust entry point — see ci.toml
+    [allow].tools; bare `rustup`/`cargo` are not used here).
+  - The pinned Rust toolchain (rust-toolchain.toml) matches what's
+    actually installed (`soldr doctor`, read-only — never mutates
+    rustup).
+  - The dev dependency group is materialized.
+
+Does NOT trigger a wheel build (soldr PEP 517 backend) — that's
+reserved for `./test`. Use `./install` after a fresh clone to confirm
+the environment is sane.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def _check(cmd: list[str], label: str) -> int:
+    print(f"  {label:14} ...", end=" ", flush=True)
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print("FAIL")
+        sys.stderr.write(proc.stderr)
+        return proc.returncode
+    print("ok")
+    return 0
+
+
+def main() -> int:
+    print(f"bootstrap {ROOT.name}")
+
+    if shutil.which("uv") is None:
+        print("uv not on PATH. Install it: https://docs.astral.sh/uv/", file=sys.stderr)
+        return 1
+    if shutil.which("soldr") is None:
+        print(
+            "soldr not on PATH. Install it: https://github.com/zackees/soldr",
+            file=sys.stderr,
+        )
+        return 1
+
+    rc = 0
+    rc |= _check(["uv", "--version"], "uv")
+    rc |= _check(["soldr", "--version"], "soldr")
+    rc |= _check(["uv", "sync", "--frozen", "--no-install-project"], "uv sync")
+    rc |= _check(["soldr", "doctor"], "toolchain")
+    if rc != 0:
+        return rc
+
+    print("\nNext steps:")
+    print("  ./ci.py all       # run every gate")
+    print("  ./test            # soldr cargo test + uv sync + pytest")
+    print("  ./ci.py --list    # show registered gates")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

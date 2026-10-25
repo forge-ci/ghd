@@ -1,0 +1,69 @@
+name: "cache (sanctioned actions/cache wrapper)"
+description: >-
+  The ONLY sanctioned `actions/cache` call site in this repository
+  (ci.toml [allow].cache-actions.only-in, default `.github/actions/cache`;
+  ci-lint's CACHE-001 rejects a direct `actions/cache`/`actions/cache/
+  restore`/`actions/cache/save` step anywhere else, SEC-004 requires the
+  SHA pin below). `key` MUST be a dynamic expression the caller built from
+  `ci_lint cache key` (a prior step's output, or an `inputs.*`
+  passthrough) -- never a literal (CACHE-002).
+
+  setup-soldr and astral-sh/setup-uv own every OTHER declared cache
+  family's restore/save calls internally; this wrapper exists only for the
+  PR compile-delta layer (ci.yml#6 §6 "PR caches: a small delta, never a
+  base") that neither of those actions knows about -- a small
+  `.tar.gz` produced by `ci_lint cache delta pack`, restored by exact key
+  or by a `-b<base8>-` prefix and applied with `ci_lint cache delta apply`.
+
+inputs:
+  mode:
+    description: '"restore" or "save".'
+    required: true
+  key:
+    description: >-
+      Primary cache key. MUST be an expression (a prior step's
+      `outputs.*`, or `inputs.*` passed through from this wrapper's own
+      caller) -- CACHE-002 rejects a literal here.
+    required: true
+  restore-keys:
+    description: >-
+      Newline-separated prefix-match fallback keys (restore mode only).
+      Used for the PR-delta "restore by prefix" probe: exact `key` never
+      hits across pushes (it carries a per-generation commit-sha suffix),
+      so the real hit comes from a restore-keys prefix match against the
+      previous generation's exact key.
+    required: false
+    default: ""
+  path:
+    description: File or directory to restore/save.
+    required: true
+
+outputs:
+  cache-hit:
+    description: '"true" only on an EXACT `key` match (restore mode; always empty in save mode).'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  matched-key:
+    description: >-
+      The literal key actually restored -- the exact `key` on an exact
+      hit, or the matched `restore-keys` prefix entry on a fallback hit;
+      empty on a full miss (restore mode only).
+    value: ${{ steps.restore.outputs.cache-matched-key }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Restore
+      if: inputs.mode == 'restore'
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+        path: ${{ inputs.path }}
+
+    - name: Save
+      if: inputs.mode == 'save'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}

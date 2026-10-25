@@ -1,0 +1,33 @@
+#!/usr/bin/env -S uv run --no-project --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Thin wrapper: route to the canonical CI dispatcher's test gate.
+
+`./test` is a named build entry point (one of the documented places
+where the full project sync is opted INTO — see
+`ci/hooks/tool_guard.py`'s `BUILD_ENTRY_POINTS`). The test gate runs
+`soldr cargo test --workspace --locked`, then `uv sync --frozen` (which
+installs the project through the soldr PEP 517 backend, building
+`_native` and bundling `ghd-cli`), then `pytest`.
+
+A Python script (not bash) per zackees/ci.yml#6 round 1 — see `./lint`
+for the same note.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def main() -> int:
+    return subprocess.run(
+        [str(ROOT / "ci.py"), "test"], cwd=ROOT, check=False
+    ).returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

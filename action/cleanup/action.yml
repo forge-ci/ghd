@@ -1,0 +1,27 @@
+name: "ghd: cleanup"
+description: >-
+  Post-job step that pairs with the root action.yml. Uninstalls the
+  ghd uv tool and trims the uv cache so the
+  runner leaves the same shape it had before the action ran. Add with
+  `if: always()` so it runs even if an earlier step failed.
+
+inputs:
+  keep-cache:
+    description: >-
+      When 'true', skip `uv cache prune --ci` and leave the uv cache
+      untouched. Useful for self-hosted runners where the cache is
+      managed externally.
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Uninstall tool
+      shell: bash
+      run: python3 ${{ github.action_path }}/cleanup.py uninstall
+
+    - name: Prune uv cache
+      if: inputs.keep-cache != 'true'
+      shell: bash
+      run: python3 ${{ github.action_path }}/cleanup.py prune-cache

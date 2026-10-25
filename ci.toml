@@ -1,0 +1,294 @@
+# ci.toml — this repo's CI contract. Checked and planned by ci-lint (zackees/ci.yml).
+# Nothing here generates YAML: it bounds what the YAML may do and decides what each run selects.
+schema  = 3
+profile = "rust-pypi-app"
+linter  = "zackees/ci.yml@551cd2f29220787bed92002bf2de5822ae050159"      # the exact ci-lint commit precheck runs
+
+# ── Platforms ────────────────────────────────────────────────────────────────
+# Every platform compiles on linux (Soldr cross) and executes on its own runner.
+# Each id generates a [ci-<id>] tag; `group` generates [ci-<group>].
+#
+# `linux-x64`'s `wheel` stays `manylinux_2_17` -- the fleet's declared
+# glibc floor for a distributed Linux wheel (docs/policy-rust.md,
+# proposal.md's target model), NOT a value to relax to match whatever a
+# particular build happened to produce. `soldr wheel --release` builds
+# every `*-linux-gnu` release wheel, host target included, against
+# soldr's catalogue glibc-2.17 toolchain (zackees/soldr#3432,
+# ghd#39); `ci/release.py glibc-check` measures it
+# from the artifact's own bytes. The `fast` lane's dev-profile wheel stays host-native
+# (untagged manylinux floor) for iteration speed; only release/verify
+# artifacts are held to this floor -- see docs/RELEASE.md.
+[platforms]
+linux-x64     = { target = "x86_64-unknown-linux-gnu",  runs-on = "ubuntu-24.04",     group = "linux",   wheel = "manylinux_2_17" }
+linux-arm64   = { target = "aarch64-unknown-linux-gnu", runs-on = "ubuntu-24.04-arm", group = "linux",   wheel = "manylinux_2_17" }
+windows-x64   = { target = "x86_64-pc-windows-msvc",    runs-on = "windows-2025",     group = "windows" }
+windows-arm64 = { target = "aarch64-pc-windows-msvc",   runs-on = "windows-11-arm",   group = "windows" }
+macos-arm64   = { target = "aarch64-apple-darwin",      runs-on = "macos-15",         group = "macos" }
+macos-x64     = { target = "x86_64-apple-darwin",       runs-on = "macos-15-intel",   group = "macos" }
+# musllinux (ci.yml#43): release-only -- built + verified only on the
+# release graph, NEVER through the generic platform-build/platform-run
+# lane matrix (`[flow.release].platforms` below lists the 6 platforms
+# above explicitly, NOT "all", precisely so these two stay out of
+# `plan.platform_lanes`). Reason: a musl wheel cannot be pip-installed
+# into a glibc CPython (musllinux tags are not compatible on a manylinux
+# host) and a statically-linked musl PyO3 extension cannot be dlopen'd by
+# a glibc-linked CPython either -- install smoke needs a REAL musl libc
+# Python, i.e. an Alpine container (`release-musl-smoke` in ci.yml, a
+# bespoke job pair mirroring `release-linux-x64`'s existing precedent of
+# handling one platform outside the generic matrix rather than teaching
+# `ci_lint`'s planner a new "release-only" platform flag -- issue #6
+# round M2-18 decision). `ci_lint release verify` (PKG-006) still
+# requires exactly one wheel per EVERY declared [platforms] entry
+# unconditionally (it iterates `ci.platforms`, not the resolved flow's
+# selection), so these two are still gated the same as every other
+# platform on the release graph.
+linux-x64-musl   = { target = "x86_64-unknown-linux-musl",  runs-on = "ubuntu-24.04",     group = "linux", wheel = "musllinux_1_2" }
+linux-arm64-musl = { target = "aarch64-unknown-linux-musl", runs-on = "ubuntu-24.04-arm", group = "linux", wheel = "musllinux_1_2" }
+
+# ── Python packaging (§13) ───────────────────────────────────────────────────
+[python]
+backend = "soldr"                   # the only PEP 517 backend; maturin only as Soldr's own dependency
+cli     = { name = "ghd", crate = "ghd-cli", native = true }   # on PATH = the Rust binary
+abi3    = "cp310"                   # one wheel per platform
+pythons = ["3.11", "3.14"]          # PR smoke uses the first (floor); release smokes all
+
+# ── Rust workspace discipline (§12) ──────────────────────────────────────────
+[rust]
+public  = "crates/ghd"         # the amalgam we ship: re-exports + dep: feature wiring only
+private = "crates/private/*"        # publish = false, no [features], no cfg(feature); each tested once
+ship    = [[], ["daemon"]]            # the ONLY amalgam feature sets ever compiled
+
+[rust.tests]                        # test functions are free; test binaries are declared and capped
+max-binary = "40MB"
+max-total  = "150MB"
+# "<crate>:lib" = the lib unit-test harness; "<crate>:bin:<name>" = a bin's harness;
+# "<crate>:test:<name>" = an integration-test target (tests/<name>.rs or tests/<name>/main.rs)
+binaries = [
+  "ghd-core:lib",
+  "ghd-platform:lib",
+  "ghd-daemon:lib",
+  "ghd:test:api",
+  "ghd-cli:test:cli",
+]
+
+# ── Lint lanes ───────────────────────────────────────────────────────────────
+[lint.dylint]
+targets = "all-platforms"           # one check-only pass per declared target, all on Linux
+# shape: D6 measured round 3B, nightly-2026-05-28 driver now catalogued
+# (round 2's blocker resolved). Same-commit, both cold (no cache: PR
+# flow never writes), host + 5 cross targets, 6 declared platforms:
+#   sequential:    6 passes, 88.8s check time (+ ~15s prepare), job 148s
+#     (run 36500282280, job 109187749194)
+#   multi-target:  1 pass,   55.5s check time (+ ~14s prepare), job 114s
+#     (run 36501033796, job 109191488953)
+# multi-target is 37% faster on the check passes themselves and 23%
+# faster end to end -- confirms the D6 hypothesis (host-side proc-macro/
+# build-script artifacts compile once for every target in one
+# invocation, instead of once per sequential pass). Selected as the
+# winner; ci.yml's dylint job passes --shape multi-target accordingly.
+shape   = "multi-target"            # "multi-target" | "sequential" | "per-target-jobs"
+budget  = { warm = "115s", cold = "235s" }  # round 3B's own cold numbers; round 4 recalibrates "warm" once caching exists
+
+# ── Suites ───────────────────────────────────────────────────────────────────
+# Each id generates [ci-test-<id>] and [no-test-<id>]. A skip inside a required suite is a failure.
+[suites]
+unit        = { run = "ci/test.py unit",        required = true }
+smoke       = { run = "ci/wheel.py smoke",      required = true }    # clean venv: import + native CLI
+integration = { run = "pytest -m integration tests/integration" }
+init        = { run = "ci/instantiate.py",      cache = "none" }     # from zero: proves caches mask nothing (ci/instantiate.py -> ci_lint precheck -> ci/init.py build/wheel-build/wheel-install/wheel-smoke, the `init` job)
+perf        = { run = "ci/perf.py",             kind = "bench", gating = false }
+
+# ── Flows ────────────────────────────────────────────────────────────────────
+[flow.pr]                                   # every PR push; tags compose on top
+platforms = ["linux-x64"]
+suites    = ["unit", "smoke"]
+dylint    = "all-platforms"
+budget    = { critical-path = "8m" }
+
+[flow.main]
+extends    = "pr"
+cache      = "write"
+pre-prune  = true
+
+[flow.release]
+# Explicit list, NOT "all" -- deliberately excludes linux-x64-musl/
+# linux-arm64-musl (see their [platforms] comment above): they are built
+# and verified by their own bespoke `release-musl-build`/`release-musl-
+# smoke` job pair in ci.yml, never by the generic platform-build/
+# platform-run lane matrix `plan.platform_lanes` drives.
+platforms = ["linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "macos-arm64", "macos-x64"]
+suites    = "all"
+wheels    = "all"
+publish   = "pypi"
+
+[flow.nightly]
+extends    = "release"
+schedule   = "daily"
+cache      = "write"
+pre-prune  = true
+janitor    = true
+publish    = "none"
+
+# ── Tags that are not derived ────────────────────────────────────────────────
+[tags]
+ci-full        = { add = { platforms = "all", suites = ["integration"] } }
+ci-perf        = { add = { suites = ["perf"] } }
+ci-cache-save  = { cache = "pr-base" }                # allow a capped PR-scoped base save (lockfile/toolchain change)
+no-test        = { remove = { suites = "tests" } }    # any removal => not mergeable
+release        = { flow = "release", publish = "rehearsal" }
+
+# ── Caches (§6) ──────────────────────────────────────────────────────────────
+[cache]
+budget   = "9GB"                    # proven statically: steady + lockfile peak + PR budget
+write-on = ["main", "nightly"]      # base layers: default branch only (setup-soldr#527, #5 RUST-010)
+never    = ["linked-tests", "nextest-archives", "wheels", "incremental", "target-dir", "perf-results"]
+retired  = ["solo-toolchain", "cook-delta-v2", "setup-soldr-dylint-output-v1"]   # v1 = pre-setup-soldr-v0.9.82 dylint-output key format
+pr       = { mode = "delta", families = ["compile"], max-per-pr = "128MB", budget = "1GB", trim = "on-close" }
+
+##  Sizes below are MEASURED (`gh api repos/forge-ci/ghd/
+##  actions/caches`, `python3 -m ci_lint cache audit`, 2026-09-29) unless noted,
+##  set to ~1.5x the largest observed live instance, rounded up. Round-4B
+##  worker report has the full arithmetic and reasoning per family, including
+##  the setup-soldr key-shape source citations (`resolve-setup.ts`/`cook-
+##  cache.ts`/`blessed-cross-prepare.ts`) that justify each `per=`.
+[cache.family]
+# key = prefix(runnerOs,runnerArch) + Cargo.lock-hash + toolchain-signature
+# digest (resolve-setup.ts:1050-1080) -- NOT cache-key-suffix (dropped for
+# this family by setup-soldr#375) and NOT the cross-compile target (crate
+# SOURCES are target-independent). Cardinality is one per distinct
+# toolchain signature actually used: stable (fast + every platform-build
+# leg share ONE entry) + nightly (the dylint job's own toolchain) = 2
+# observed today (30.5MB + 6.0MB live). per="none" (not "platform": it does
+# not scale with declared platform count), max sized for both at once.
+registry   = { via = "setup-soldr:cargo-registry",  max = "96MB", lockfile = true, per = "none" }
+# key = "cook-base-v2-{os}-{libc}-rustc{ver}-f{flags}-l{lockhash}-soldrv{ver}"
+# (cook-cache.ts:247) -- no cross-target component; cook only ever cooks the
+# HOST toolchain's own dependency closure (issue #5 "cook Linux only"/open
+# question on cross lanes). One live entry (26.9MB) regardless of how many
+# platform-build legs also request prebuild-deps=soldr-cook.
+deps       = { via = "setup-soldr:cook",            max = "42MB", lockfile = true, per = "none" }
+# key = prefix(os,arch) + toolchain-signature digest (INCLUDES the merged
+# cross-target list, resolve-setup.ts:653/789) + cache-key-suffix + lockfile
+# hash (setup-soldr#237 kept the suffix deliberately: target/ content
+# differs per job) -- genuinely one distinct entry per declared platform
+# (fast=default target, each platform-build leg=its own cross target), PLUS
+# one more for the dylint job's own nightly-toolchain compile (measured
+# 72.6MB, the largest live instance -- bigger than the default-target one,
+# 19.1MB). per="platform" undercounts by that +1; the 1.5x headroom on
+# `max` (vs. cardinality) absorbs it rather than growing a schema field.
+compile    = { via = "setup-soldr:build-cache",     max = "110MB", lockfile = true, per = "platform", min = "1MB" }
+# key = "setup-soldr-prepare-v3-{os}-{arch}-{target}-r{repoHash}"
+# (blessed-cross-prepare.ts:89) -- one per actual cross target, never the
+# host. per="cross-platform" (5) is exactly right by construction.
+# UNMEASURED (round-4B): no live setup-soldr-prepare-v3-* entry exists
+# yet -- prepare/save only happens on a writer flow (main/nightly), and
+# this round's platform-build runs (windows-x64, windows-arm64; PR #24,
+# runs 36506934489/36507324528) correctly never saved (cache_save=false,
+# proven: no new refs/pull/24/merge entry appeared). 500MB is the
+# pre-round-4 placeholder, carried forward; re-measure via `ci-lint
+# cache audit` after the first writer-flow (main) run and tighten this
+# to measured x ~1.5 like every other family above.
+sdk        = { via = "setup-soldr:cross-targets",   max = "500MB", per = "cross-platform", evict = "lru" }
+# key = "setup-soldr-dylint-v2-{os}-{arch}-{target}-{digest}-dylint"
+# (resolve-setup.ts:1185) -- the nightly Dylint toolchain + driver +
+# foundation crates, ONE entry regardless of how many --target passes the
+# multi-target shape checks in the same job/invocation (round-3B). Measured
+# 668.5MB live (`setup-soldr-dylint-v2-linux-x64-...-dylint`), previously
+# undeclared (CACHE-001 on every run). per="none": doesn't scale with
+# declared platforms -- it is the one Linux Dylint job's own toolchain.
+dylint     = { via = "setup-soldr:dylint",          max = "1024MB", per = "none", min = "1MB", evict = "lru" }
+# key = "setup-soldr-dylint-output-v2-{os}-{arch}-{hash}-{lockhash}" (setup-soldr >= v0.9.82, resolve-setup.ts:1258; v1 is retired above) -- the multi-target shape's own lint-output cache, one entry per
+# commit-state generation (older generations are CACHE-006 "superseded",
+# not concurrent per-platform variants -- the 3 live entries observed are 3
+# generations of ONE family member, not 3 simultaneous ones). Measured
+# ~71-75MB per generation; per="none" (was "platform", overcounting 6x).
+dylint-out = { via = "setup-soldr:dylint-output",   max = "115MB", lockfile = true, per = "none", min = "1MB" }
+# key = "soldr-mini-v2-{os}-{arch}-{libc}-v{soldrVersion}" (soldr-mini-cache
+# .ts:85) -- the soldr binary itself, one entry regardless of target/lane.
+# Measured 10.8MB live, previously undeclared (CACHE-001).
+soldr-mini = { via = "setup-soldr:soldr-mini",      max = "18MB", per = "none" }
+# key = "setup-uv-2-{arch}-{platform-triple}-{os-version}-{python-version}-
+# {lockfile-hash}[-suffix]" (astral-sh/setup-uv src/cache/restore-cache.ts;
+# see docs/ci-toml.md "astral-sh/setup-uv's own cache") -- cardinality is
+# per (arch, platform, OS version, python version), which tracks declared
+# platforms closely enough in this repo (6 distinct live entries observed
+# across the 6 declared platforms on 2026-09-29) that per="platform" is the
+# best fit the schema offers; round-4A's note that python-patch-version
+# churn could still exceed it stands as a known follow-up, not fixed here.
+# max sized for the largest observed instance (linux-x64, 28.2MB).
+uv         = { via = "setup-uv",                    max = "44MB", per = "platform" }
+
+# ── Local runs: bosn → act (§11) ─────────────────────────────────────────────
+[local]
+runner = "bosn-act"
+lanes  = ["precheck", "fast", "dylint"]
+cache  = "machine"
+
+# ── Default-branch verified reuse (GEN-021, zackees/ci.yml#162) ─────────────
+# A push to `main` may skip a required job when the one merged pull request
+# already validated a byte-identical tree: one merged PR, `merge_commit_sha`
+# equal to the pushed SHA, the same tree, and a green, fresh per-job proving
+# run. Anything else -- a squash-merge batch, a drifted tree, a failed or
+# stale proving run -- leaves every job running.
+#
+# Only the `fast` lane is skippable. `dylint` and the platform lanes keep
+# running on every main push because they are the default-branch cache
+# writers: skipping them would stale the caches every PR restores from and
+# pay back the saving many times over.
+#
+# The drift backstop is the daily `schedule` trigger below (ci.toml
+# `[flow.nightly]`), which runs the full tier on a fixed cadence regardless
+# of what reuse decides, plus `--max-age-hours`: a proving run older than
+# that forces a full run.
+[reuse.default-branch]
+mode           = "enforce"
+workflows      = ["ci.yml"]
+required-jobs  = "plan"
+max-age-hours  = 24
+
+# ── Allowlists ───────────────────────────────────────────────────────────────
+[allow]
+workflows         = { "ci.yml" = ["pull_request", "push:main", "schedule", "workflow_dispatch"], "ci-pre.yml" = ["workflow_call"], "release-auto.yml" = ["push:main", "workflow_dispatch"] }
+actions           = ["actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/cache", "zackees/setup-soldr", "astral-sh/setup-uv", "pypa/gh-action-pypi-publish"]
+# "plan" (round-4B): the wrapper's save-cache input must be an expression
+# derived from the precheck plan (needs.precheck.outputs.cache_save, passed
+# through as inputs.save-cache), never a literal -- saves only fire when
+# plan.cache_mode == "write" (CACHE-009).
+setup-soldr       = { only-in = ".github/actions/soldr", require = { solo-toolchain-cache = "false", cook-delta = "false", save-cache = "plan" } }
+# Round-4B: astral-sh/setup-uv's own save-cache input is checked the same
+# way, on every use of the action (it has no single wrapper location) --
+# missing or a literal "true" both save unconditionally, including on PRs
+# (CACHE-003; see docs/ci-toml.md "astral-sh/setup-uv's own cache").
+setup-uv          = { require = { save-cache = "plan" } }
+# Round-4B (SEC-002 refinement): top-level permissions are capped at
+# contents:read + actions:read (free on every job too, no entry needed);
+# any wider per-job grant must be listed here by job id. `cache-maint`
+# (deliverable 4) needs `actions: write` (cache preprune deletes); `cache-janitor` (ci-pre.yml, zackees/ci.yml#23) needs it for janitor deletes.
+# Round-4C adds two more `actions: write` grants: `precheck` (ci_lint
+# cache trim, same-repo PR events only) and `fast` (ci_lint cache heal --
+# deletes the previous PR compile-delta generation right after a new one
+# saves, so exactly one survives per PR/family/platform). Round-5
+# (deliverable 3): `publish` needs `id-token: write` to mint the OIDC
+# mock-publish token -- SEC-002 additionally always requires that grant
+# be paired with `environment: pypi` on the `publish` job specifically,
+# allowlisted here or not.
+permissions       = { "actions: write" = ["cache-maint", "precheck", "fast", "cache-janitor", "prepare", "release-handoff"], "contents: write" = ["github-release"], "id-token: write" = ["publish"], "pull-requests: read" = ["reuse-decision"] }
+tools             = ["soldr", "uv", "python3", "yq", "git", "gh"]
+secrets           = []
+platform-selector = "crates/private/ghd-platform/src/lib.rs"   # the ONE file allowed to select on host
+platform-code     = ["crates/private/ghd-platform/src/platforms/**", "src/ghd/platforms/**"]
+
+[publish]
+pypi = { auth = "oidc", environment = "pypi", mode = "mock" }
+
+# ── Exceptions: declared, reported on EVERY run, fail once expired ──────────
+# The `ci.sh` GEN-005 exception (Gate launcher kept as a bash wrapper,
+# tracked by forge-ci/ghd#15) is RESOLVED: `ci.sh` is
+# removed and `./ci.py` is directly executable via its own PEP 723
+# shebang. No `[[exceptions]]` remain; precheck must show 0 exceptions.
+
+# The two SEC-002 exceptions round-3B needed for `actions: read` (on
+# ci-pre.yml's precheck job and ci.yml's precheck-caller/ci-ok jobs)
+# are GONE as of round-4B: zackees/ci.yml@31369f5 makes `actions: read`
+# free at both the top level and per-job (the exact refinement the round-3B
+# worker report drafted upstream -- see that report and zackees/ci.yml#6).

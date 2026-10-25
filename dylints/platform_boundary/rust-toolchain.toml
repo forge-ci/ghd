@@ -1,0 +1,19 @@
+[toolchain]
+# Pinned explicitly to a nightly the soldr-toolchain catalogue actually
+# publishes a prebuilt Dylint v6.0.3 driver for -- confirmed working in
+# zackees/clud's `_dylint.yml` / `dylints/ban_manual_slash_normalize`
+# ("toolchain catalogue hit for dylint-driver v6.0.3-nightly-2026-05-28").
+# The workspace's OWN stable channel (root rust-toolchain.toml: 1.95.0)
+# auto-maps to nightly-2026-02-28 via the catalogue's "1.95" bucket, but
+# that nightly has NO catalogued driver asset -- `soldr dylint prepare`
+# then needs a from-source build, whose nested cargo invocation fails in
+# its own isolated temp dir (no rust-toolchain.toml there); see
+# zackees/ci.yml#6 round 2B's worker report for the upstream issue draft.
+# `.github/actions/soldr`'s `dylint-toolchain` input (wired to
+# setup-soldr's own `dylint-toolchain`) tells setup-soldr to request THIS
+# exact nightly instead of the auto-mapped one; this file must keep
+# matching it exactly, since a Dylint library only loads into a driver
+# built for its own nightly.
+channel = "nightly-2026-05-28"
+components = ["llvm-tools-preview", "rust-src", "rustc-dev"]
+profile = "minimal"

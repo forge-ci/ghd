@@ -1,0 +1,28 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "ghd: one cached, batched, budget-aware gateway for gh / GitHub API reads."
+
+[lib]
+name = "ghd"
+test = false
+
+[features]
+# The ONLY amalgam feature sets ci.toml's [rust] ship list ever compiles
+# are `[]` (this line absent) and `["daemon"]`. `daemon` is dep: wiring only —
+# no `#[cfg(feature = "daemon")]` branch exists anywhere in this crate or in
+# ghd-core; the feature only decides whether ghd-daemon is linked
+# in at all.
+daemon = ["dep:ghd-daemon"]
+
+[dependencies]
+ghd-core = { path = "../private/ghd-core" }
+ghd-daemon = { path = "../private/ghd-daemon", optional = true }

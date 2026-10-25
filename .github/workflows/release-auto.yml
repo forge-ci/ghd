@@ -1,0 +1,149 @@
+name: release-auto
+
+# Automatic release: a version bump on main ships itself. Three explicit
+# hops, no `workflow_run` (SEC-003); ci/auto_release.py holds every
+# decision and tests/test_auto_release.py its table. See RELEASE.md.
+#
+#   1. push to main bumping [workspace.package].version
+#        -> prepare: "candidate" -> dispatch ci.yml sha=<bump> (release flow)
+#   2. ci.yml release flow green (release-verify + OIDC proof)
+#        -> release-handoff dispatches this workflow with candidate_sha and
+#           full_ci_run_id
+#   3. prepare: "publish" (run verified through the API)
+#        -> github-release: tag + attach the verified dist
+#        -> publish: the same bytes to PyPI over OIDC trusted publishing
+#
+# The dist is downloaded from the verifying run by id, never rebuilt
+# (REL-005). A maintainer can start hop 3 by hand with the same inputs.
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact main commit to release (40-hex).
+        required: true
+        type: string
+      full_ci_run_id:
+        description: Id of a green ci.yml release-flow run (`release <sha>`) for candidate_sha.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-auto
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # `gh workflow run ci.yml` for a candidate; reading the verifying run.
+      actions: write
+    outputs:
+      action: ${{ steps.detect.outputs.action }}
+      sha: ${{ steps.detect.outputs.sha }}
+      tag: ${{ steps.detect.outputs.tag }}
+      run_id: ${{ steps.detect.outputs.run_id }}
+    steps:
+      - name: Checkout (full history -- the bump commit, its parent and the candidate)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide (candidate / publish / none)
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          FULL_CI_RUN_ID: ${{ inputs.full_ci_run_id }}
+        run: python3 ci/auto_release.py detect
+
+      - name: Dispatch the release flow for the candidate
+        if: steps.detect.outputs.action == 'candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CANDIDATE_SHA: ${{ steps.detect.outputs.sha }}
+        run: python3 ci/auto_release.py dispatch-candidate
+
+  github-release:
+    name: github-release
+    needs: prepare
+    if: ${{ needs.prepare.outputs.action == 'publish' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # Creates the tag and the GitHub Release.
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout (for ci/auto_release.py)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Download the verified release dist from the verifying run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist-verified
+          path: dist
+          run-id: ${{ needs.prepare.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Create the GitHub Release at the candidate commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.prepare.outputs.sha }}
+          FULL_CI_RUN_ID: ${{ needs.prepare.outputs.run_id }}
+        run: python3 ci/auto_release.py github-release
+
+  # Job id MUST be `publish` with `environment: pypi` (ci.toml [publish],
+  # SEC-002): the one PyPI OIDC holder. Register this file on PyPI as the
+  # project's trusted publisher (repo, workflow `release-auto.yml`,
+  # environment `pypi`).
+  publish:
+    name: publish
+    needs: [prepare, github-release]
+    if: ${{ needs.prepare.outputs.action == 'publish' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout (for ci/auto_release.py)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Download the verified release dist from the verifying run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-dist-verified
+          path: dist
+          run-id: ${{ needs.prepare.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Keep only distributions (release-manifest.json is evidence, not an upload)
+        run: python3 ci/auto_release.py prune-dist
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: dist

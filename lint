@@ -1,0 +1,36 @@
+#!/usr/bin/env -S uv run --no-project --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Thin wrapper: route to the canonical CI dispatcher.
+
+`./lint` is preserved as muscle memory; the actual implementation is
+`./ci.py fmt && ./ci.py clippy && ./ci.py ruff`. Anything new you'd want
+under `./lint` belongs as a gate under `ci/gates/`.
+
+A Python script (not bash) per zackees/ci.yml#6 round 1: every
+extensionless entry point in this repo, including `./ci.py` itself
+(forge-ci/ghd#15), is a
+`uv run --no-project --script` PEP 723 script.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def main() -> int:
+    for gate in ("fmt", "clippy", "ruff"):
+        rc = subprocess.run(
+            [str(ROOT / "ci.py"), gate], cwd=ROOT, check=False
+        ).returncode
+        if rc != 0:
+            return rc
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

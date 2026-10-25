@@ -1,0 +1,22 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "ghd client side: wire protocol, endpoint discovery, loopback client and the gh-compatible CLI."
+publish = false
+
+[lib]
+name = "ghd_core"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+ghd-platform = { path = "../ghd-platform" }
+prost = { workspace = true }

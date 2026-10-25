@@ -1,0 +1,27 @@
+# Normalize line endings to LF for all text files. Without this the
+# Linux ruff format check fails on CRLF-terminated files committed
+# from Windows.
+* text=auto eol=lf
+
+# Shell scripts and Python sources must be LF.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+
+# Treat these as binary so git doesn't try to convert line endings.
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary
+*.so binary
+*.dylib binary
+*.pyd binary
+*.exe binary
+
+# Lockfiles stay as-is.
+Cargo.lock text eol=lf
+uv.lock text eol=lf

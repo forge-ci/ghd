@@ -1,0 +1,14 @@
+# Workspace-wide clippy config for the unwrap/expect/panic ban declared
+# in `[workspace.lints.clippy]` (Cargo.toml) -- see
+# forge-ci/ghd#13 (ci.yml#6 round M2-4).
+#
+# Without these carve-outs, `#[test]` functions and `const` initializers
+# stop being ergonomic (a bare `.unwrap()` in a test is normal Rust style
+# and not the "blind landmine in shipped code" the policy targets).
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+allow-unwrap-in-consts = true
+allow-expect-in-consts = true

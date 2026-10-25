@@ -1,0 +1,59 @@
+# Local act stack -- zackees/ci.yml#6 section 11 ("bosn -> act: local CI is
+# first class"). Pattern matches zackees/zccache's ci/docker/act/ stack:
+# a small container carries a pinned `act` + the Docker CLI and talks to
+# the *host* Docker engine through a bind-mounted socket, so act's job
+# containers are siblings on that engine, not nested inside this one.
+#
+# The one addition vs. zccache/clud's equivalent stacks: this repository
+# bans checked-in shell scripts (ci.toml precheck group 3 / AGENTS.md), so
+# the task command is `python3 /work/ci/local.py act-inner`, never a `.sh`
+# file. `python3 ci/local.py act` (run on the host, not in this stack) is
+# what actually invokes `bosn run --task act-run` -- see
+# ci/localrun/act_orchestrate.py and ci/docker/act/README.md.
+[stack.act]
+dockerfile = "ci/docker/act/Dockerfile.bosn-act"
+family = "template-act"
+default = true
+workdir = "/work"
+
+[stack.act.mounts.repo]
+source = "."
+destination = "/work"
+
+[stack.act.mounts.docker]
+source = "/var/run/docker.sock"
+destination = "/var/run/docker.sock"
+
+# Machine-scoped (outlive this stack's own container across `bosn done` /
+# `bosn gc`): act's action checkouts, and the built-in Actions
+# cache-server data that backs every `actions/cache`, `setup-uv` and
+# `setup-soldr` cache the jobs save. Split into two volumes (not one, as
+# zccache's simpler stack does) because ci/localrun/cache_audit.py's
+# ACT-001 check only ever needs to read the cache-server volume, never
+# the action-checkout one.
+[stack.act.volumes.act-actions]
+scope = "machine"
+destination = "/root/.cache/act"
+
+[stack.act.volumes.act-cache-server]
+scope = "machine"
+destination = "/root/.cache/actcache"
+
+# Round-4B act parity, part 2: `.ci-lint/` (the ci.toml-pinned zackees/
+# ci.yml checkout) is gitignored, so act's default job-container copy
+# (git-aware; drops every gitignored path) never carries it into a job
+# container -- confirmed empirically (round-4B worker report). This
+# volume is populated by `act_inner.py` at container-start (a plain git
+# clone/fetch, same as `ci_lint_checkout.py`'s host-side one, just
+# pointed here instead of at `repo_root/.ci-lint`) and mounted into each
+# JOB container by Docker volume name (`bosn-m-template-act-ci-lint` --
+# see ci/localrun/act_inner.py's `--container-options`), never by path,
+# since a path-based mount (`--bind`) does not survive the nesting (this
+# stack's own container is itself not the true Docker host).
+[stack.act.volumes.ci-lint]
+scope = "machine"
+destination = "/root/.cache/ci-lint"
+
+[task.act-run]
+stack = "act"
+cmd = "python3 /work/ci/local.py act-inner"

@@ -1,0 +1,6 @@
+reviews:
+  auto_review:
+    enabled: false
+  commit_status: false
+  fail_commit_status: false
+  request_changes_workflow: false

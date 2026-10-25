@@ -1,0 +1,87 @@
+# Shared CI tool consumer: protocol implementation lives in zackees/ci.yml.
+# The default run remains the complete original PR workflow under Bosn -> act2.
+[gate]
+run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json"]
+verify = "ci.yml:verify"
+mode = "shadow"
+
+[gate.full-run]
+receipt = "lane-passes-v1"
+min-misses = 2
+
+[gate.lanes.precheck]
+run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "precheck"]
+tools = ["bosn", "docker", "uv", "python"]
+
+[gate.lanes.fast]
+run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "fast"]
+tools = ["bosn", "docker", "uv", "python"]
+
+[gate.lanes.dylint]
+run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "dylint"]
+tools = ["bosn", "docker", "uv", "python"]
+
+[gate.replay]
+repository = "forge-ci/ghd"
+workflow = "ci.yml"
+mode = "minimal"
+report-source = "stdout"
+qualified = true
+provider-query = ["bosn", "ci", "runners", "list", "--json"]
+
+[[gate.replay.selections]]
+lane = "precheck"
+job = "precheck"
+event = "pull_request"
+
+[[gate.replay.selections]]
+lane = "fast"
+job = "fast"
+event = "pull_request"
+
+[[gate.replay.selections]]
+lane = "dylint"
+job = "dylint"
+event = "pull_request"
+
+[[gate.replay.jobs]]
+source-job = "ci.yml:verify"
+capture-outputs = ["skip_fast", "skip_dylint"]
+lanes = ["precheck", "fast", "dylint"]
+
+[[gate.replay.jobs]]
+source-job = "ci-pre.yml:precheck"
+capture-outputs = ["cache_save", "fast_reused", "dylint_reused", "fast_suites_json"]
+lanes = ["precheck", "fast", "dylint"]
+
+[[gate.replay.jobs]]
+source-job = "ci-pre.yml:cache-budget"
+lanes = ["precheck", "fast", "dylint"]
+
+[[gate.replay.jobs]]
+source-job = "ci-pre.yml:cache-janitor"
+lanes = ["precheck", "fast", "dylint"]
+
+[[gate.replay.jobs]]
+source-job = "ci.yml:cache-maint"
+lanes = ["fast", "dylint"]
+
+[[gate.replay.jobs]]
+source-job = "ci.yml:reuse-decision"
+lanes = ["fast"]
+
+[[gate.replay.jobs]]
+source-job = "ci.yml:fast"
+lanes = ["fast"]
+
+[[gate.replay.jobs]]
+source-job = "ci.yml:dylint"
+lanes = ["dylint"]
+
+[gate.trust]
+mode = "enforce"
+skip = ["ci.yml:fast", "ci.yml:dylint"]
+covered-by = { "ci.yml:fast" = ["fast"], "ci.yml:dylint" = ["dylint"] }
+surfaces = ["ci/**"]
+audit-rate = 10
+full-labels = ["ci-cache-save", "ci-full", "ci-linux", "ci-linux-arm64", "ci-linux-arm64-musl", "ci-linux-x64", "ci-linux-x64-musl", "ci-macos", "ci-macos-arm64", "ci-macos-x64", "ci-perf", "ci-perf-linux", "ci-perf-macos", "ci-perf-windows", "ci-test", "ci-test-init", "ci-test-integration", "ci-test-perf", "ci-test-smoke", "ci-test-unit", "ci-windows", "ci-windows-arm64", "ci-windows-x64", "ci:full", "no-test", "no-test-init", "no-test-integration", "no-test-perf", "no-test-smoke", "no-test-unit", "release"]

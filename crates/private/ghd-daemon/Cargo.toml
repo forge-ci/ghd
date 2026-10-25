@@ -1,0 +1,22 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The ghd daemon: loopback HTTP routes, per-PR cache, ETag sentinels and the batched GraphQL reader."
+publish = false
+
+[lib]
+name = "ghd_daemon"
+doctest = false
+
+[dependencies]
+ghd-core = { path = "../ghd-core" }
+kernal-api = { workspace = true }
+prost = { workspace = true }

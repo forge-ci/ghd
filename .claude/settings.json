@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Shell|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/tool_guard.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/readme_guard.py"
+          },
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/loc_guard.py"
+          },
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/local_precheck_guard.py"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/check-on-start.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --no-project --script ci/hooks/local_precheck_guard.py --stop"
+          }
+        ]
+      }
+    ]
+  }
+}

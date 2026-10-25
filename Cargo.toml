@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ghd",
+    "crates/ghd-cli",
+    "crates/ghd-py",
+    "crates/private/ghd-core",
+    "crates/private/ghd-daemon",
+    "crates/private/ghd-platform",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+repository = "https://github.com/forge-ci/ghd"
+homepage = "https://github.com/forge-ci/ghd"
+
+[workspace.dependencies]
+anyhow = "1"
+# Exact pins (obs-rust #2056 convention): behaviour cannot drift under a
+# lockfile refresh. kernal-api is the only async/HTTP/JSON facade; no crate
+# here names tokio, reqwest, hyper or serde directly.
+kernal-api = { version = "=0.1.31", features = ["http-client", "http-server", "json", "secure-random"] }
+prost = { version = "=0.14.1", default-features = false, features = ["derive", "std"] }
+pyo3 = { version = "0.29.2", features = ["extension-module", "abi3-py310"] }
+
+# Ban the blind-panic footguns before the first one is written -- see
+# forge-ci/ghd#13 (ci.yml#6 round M2-4). Every member
+# crate opts in via `[lints] workspace = true`. `expect_used` stays "warn"
+# (not "deny") because a documented `expect("...")` on a known invariant
+# is the correct idiom; note the clippy gate runs with `-D warnings`
+# (ci/gates/clippy.py), so in practice an un-annotated `expect_used` still
+# fails CI -- see clippy.toml for the test/const carve-outs.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+unwrap_in_result = "deny"
+panic_in_result_fn = "deny"
+expect_used = "warn"
+# Function-complexity ratchet (zackees/ci.yml#229, RUST-018): clippy's default
+# ceilings (cognitive 25, 100 lines). A function over one carries
+# `#[expect(clippy::<lint>, reason = "...")]`, never `allow`.
+cognitive_complexity = "warn"
+too_many_lines = "warn"
+
+# Keep third-party crates release-grade even in the dev profile.
+# `cargo build` (no --release) compiles first-party crates unoptimized
+# for fast iteration; third-party deps (pyo3, serde, etc.) are compiled
+# once and cached at opt-level 3 so the runtime hot path stays as fast
+# as a release build. This is what makes "default to dev for local
+# iteration" safe — see fbuild#744 (~5x faster Rust-edit rebuild on
+# fbuild's workspace) and forge-ci/ghd#2.
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+# The set of targets ci.toml declares under [platforms]. ci-lint checks
+# these two lists stay identical (CT-* in ci.yml#6 precheck group 1) and
+# `soldr lint rust/all` additionally Clippy-checks every cfg(windows) /
+# cfg(target_os = "macos") branch against each of these, not just the host
+# — see zackees/ci.yml#6 comment 1 (soldr#3378).
+[workspace.metadata.soldr]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+
+# The repo's one Dylint library (dylints/platform_boundary/ — see its
+# README and zackees/ci.yml#6 round 2 §5a). It declares its own
+# `[workspace]` table (a standalone crate/workspace with its own nightly
+# rust-toolchain.toml), so it is already outside `members` above; this is
+# only how `soldr cargo dylint` / `soldr lint rust --cross-dylint` /
+# `soldr ci-test` discover it.
+[workspace.metadata.dylint]
+libraries = [{ path = "dylints/platform_boundary" }]

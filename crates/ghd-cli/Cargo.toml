@@ -1,0 +1,28 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# The one binary is declared below as `ghd`; without this Cargo would also
+# auto-discover src/main.rs as a second bin named after the package.
+autobins = false
+description = "Native CLI binary shipped inside the wheel via soldr's [tool.soldr.pep517] bundle-bins."
+
+[[bin]]
+name = "ghd"
+path = "src/ghd.rs"
+# No unit-test harness on the bin target itself: its behavior is proven
+# by tests/cli/main.rs, which runs the actual compiled executable via
+# env!("CARGO_BIN_EXE_ghd-cli") rather than calling library code
+# in-process.
+test = false
+
+[dependencies]
+anyhow = { workspace = true }
+ghd = { path = "../ghd", features = ["daemon"] }

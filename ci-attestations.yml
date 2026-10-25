@@ -1,0 +1,14 @@
+# Shared ci-lint emits tree/parent/input-bound trailers after qualified replay.
+# Hosted cache maintenance and its reusable precheck caller are never attested.
+version: 1
+gates:
+  rust/x86_64-unknown-linux-gnu/fast: {lane: fast}
+  python/all/fast: {lane: fast}
+  general/x86_64-unknown-linux-gnu/wheel-install: {lane: fast}
+  rust/all/dylint: {lane: dylint}
+jobs:
+  ci.yml:fast:
+    - rust/x86_64-unknown-linux-gnu/fast
+    - python/all/fast
+    - general/x86_64-unknown-linux-gnu/wheel-install
+  ci.yml:dylint: [rust/all/dylint]

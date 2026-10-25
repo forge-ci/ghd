@@ -1,0 +1,17 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Host-platform facade: one cfg_select! selector plus a cfg-free facility surface; native code lives only under src/platforms/."
+publish = false
+
+[lib]
+name = "ghd_platform"
+doctest = false

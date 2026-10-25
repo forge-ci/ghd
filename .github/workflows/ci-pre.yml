@@ -1,0 +1,310 @@
+name: ci-pre
+
+# zackees/ci.yml#6 §2. Called ONLY by ci.yml's `precheck` job
+# (`uses: ./.github/workflows/ci-pre.yml`) -- never a standalone
+# entrypoint (`GEN-001`/`GEN-008`: one PR entrypoint). Installs nothing:
+# `ubuntu-24.04` ships system python3 3.12 and yq 4.53.6; ci_lint parses
+# YAML with PyYAML if importable, else `yq -o=json`, per zackees/ci.yml#6
+# open question 1.
+#
+# Two `ci_lint` invocations, not one: `precheck` (violations + step
+# summary) has no `--github-output` of its own, and its `--plan-out`
+# infers event_name as "pull_request"/"push" only -- wrong for
+# schedule/workflow_dispatch. `plan --github-output --reuse` is the
+# authoritative, event-aware source for this job's outputs, including
+# round-3A's platform-lane matrix + title-edit reuse fields (ci.yml#6
+# round 3 brief; docs/ci-toml.md "The planner" / "Title-edit reuse").
+#
+# `actions: read` (top-level and job-level) is required so `ci_lint plan
+# --reuse` can query the Actions runs/jobs API to look up already-green
+# jobs for this PR's head SHA. ci-lint's SEC-002 rule (as pinned below)
+# does not yet distinguish `actions: read` from a wider grant -- see this
+# repo's ci.toml `[[exceptions]]` for the recorded, expiring exception
+# and the worker report for the upstream issue text.
+
+on:
+  workflow_call:
+    inputs:
+      pr-title:
+        description: >-
+          The pull_request event's title (or "" for push/schedule/dispatch).
+          Passed as a `with:` input, then only ever read from `env:` in the
+          steps below -- never interpolated into a `run:` line
+          (script-injection rule; a title can contain arbitrary text).
+        required: false
+        type: string
+        default: ""
+      event-name:
+        description: The caller's `github.event_name` (`ci_lint plan --event-name`).
+        required: true
+        type: string
+      dispatch-sha:
+        description: "workflow_dispatch's `inputs.sha`, or \"\" for every other event."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      plan:
+        description: Compact plan.json (ci_lint plan's `to_json_dict()`).
+        value: ${{ jobs.precheck.outputs.plan }}
+      platforms_json:
+        description: JSON array of selected platform ids.
+        value: ${{ jobs.precheck.outputs.platforms_json }}
+      cross_platforms_json:
+        description: JSON array of selected non-linux platform ids.
+        value: ${{ jobs.precheck.outputs.cross_platforms_json }}
+      suites_json:
+        description: JSON array of selected suite ids.
+        value: ${{ jobs.precheck.outputs.suites_json }}
+      dylint_targets_json:
+        description: JSON array of Dylint target platform ids.
+        value: ${{ jobs.precheck.outputs.dylint_targets_json }}
+      mergeable:
+        description: '"true"/"false" -- whether the current tag selection allows merging.'
+        value: ${{ jobs.precheck.outputs.mergeable }}
+      needs_platform_lanes:
+        description: '"true"/"false" -- whether this run needs the platform-build/platform-run matrix.'
+        value: ${{ jobs.precheck.outputs.needs_platform_lanes }}
+      platform_lanes_json:
+        description: >-
+          JSON array of every selected non-default-platform lane
+          ({id, target, runs_on, group, wheel, suites}) -- round-3A.
+        value: ${{ jobs.precheck.outputs.platform_lanes_json }}
+      fast_suites_json:
+        description: JSON array of the fast lane's resolved suite selection (round-3A).
+        value: ${{ jobs.precheck.outputs.fast_suites_json }}
+      lane_digests_json:
+        description: >-
+          JSON object, lane key ("fast"/"dylint"/"platform:<id>") -> 12-hex
+          digest, used in each job's display name for title-edit reuse
+          matching (round-3A).
+        value: ${{ jobs.precheck.outputs.lane_digests_json }}
+      reuse_json:
+        description: >-
+          JSON object, lane key -> {run_id, job_id, html_url} or null --
+          which lanes already have a proven-green job for the identical
+          digest on the identical PR head SHA (round-3A).
+        value: ${{ jobs.precheck.outputs.reuse_json }}
+      platform_lanes_todo_json:
+        description: platform_lanes minus every already-reused platform lane (round-3A).
+        value: ${{ jobs.precheck.outputs.platform_lanes_todo_json }}
+      fast_reused:
+        description: '"true"/"false" -- whether the fast lane is a verified reuse candidate.'
+        value: ${{ jobs.precheck.outputs.fast_reused }}
+      dylint_reused:
+        description: '"true"/"false" -- whether the dylint lane is a verified reuse candidate.'
+        value: ${{ jobs.precheck.outputs.dylint_reused }}
+      is-release:
+        description: >-
+          "true"/"false" -- round 5: whether `plan.flow` is `release` or
+          `nightly` (the only two flows that build the full release-profile
+          wheel matrix -- ci.toml [flow.release]/[flow.nightly]). Derived by
+          `ci/plan_profile.py` from `plan.flow` (never re-derives flow
+          selection itself). Reused by `release-guard`, `release-linux-x64`,
+          and `platform-build`/`platform-run`'s profile selection instead of
+          repeating the `fromJSON(plan).flow == 'release' || ...` expression
+          at each call site.
+        value: ${{ jobs.precheck.outputs.is-release }}
+      profile:
+        description: >-
+          "release"/"dev" -- round 5: the plain string form of `is-release`
+          (never `is-release == 'true' && 'release' || 'dev'`, which
+          GEN-005's shell-budget scan flags textually inside a `run:`
+          line's own expression -- see ci/plan_profile.py). Every
+          `--profile` CLI argument in `.github/workflows/ci.yml` binds to
+          this directly.
+        value: ${{ jobs.precheck.outputs.profile }}
+      cache_save:
+        description: >-
+          "true"/"false" = (plan.cache_mode == "write") -- round-4B. Every
+          writer-flow-only cache save (the setup-soldr wrapper's
+          `save-cache` passthrough, every `astral-sh/setup-uv`'s own
+          `save-cache`) binds to this instead of a literal, satisfying
+          `[allow].setup-soldr.require`/`[allow].setup-uv.require`'s
+          `"plan"` value (`CACHE-009`/`CACHE-003`).
+        value: ${{ jobs.precheck.outputs.cache_save }}
+      cache_key_pr:
+        description: >-
+          "pr-<N>" on a pull_request run, "" elsewhere (zackees/ci.yml#23
+          §5, CACHE-013) -- from `ci_lint plan --github-output`. Embedded
+          into every PR-context cache key (setup-soldr wrapper's
+          `cache-key-pr`, setup-uv `cache-suffix`) so `cache-janitor`
+          deletes a PR's entries once it closes.
+        value: ${{ jobs.precheck.outputs.cache_key_pr }}
+
+permissions:
+  contents: read
+  actions: read
+
+# No workflow-level `concurrency:` (zackees/ci.yml#23 §3, GEN-015): a
+# workflow-level cancel group would cancel a `cache-janitor` sweep
+# mid-delete. Concurrency here is per job -- only `cache-janitor` takes a
+# lock (GEN-016/017); the caller `ci.yml` keeps its own per-ref group.
+
+jobs:
+  precheck:
+    name: precheck
+    # A `pull_request: closed` run exists only for `cache-janitor` below
+    # (delete the closed PR's caches); nothing gets checked or planned.
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      platforms_json: ${{ steps.plan.outputs.platforms_json }}
+      cross_platforms_json: ${{ steps.plan.outputs.cross_platforms_json }}
+      suites_json: ${{ steps.plan.outputs.suites_json }}
+      dylint_targets_json: ${{ steps.plan.outputs.dylint_targets_json }}
+      mergeable: ${{ steps.plan.outputs.mergeable }}
+      needs_platform_lanes: ${{ steps.plan.outputs.needs_platform_lanes }}
+      platform_lanes_json: ${{ steps.plan.outputs.platform_lanes_json }}
+      fast_suites_json: ${{ steps.plan.outputs.fast_suites_json }}
+      lane_digests_json: ${{ steps.plan.outputs.lane_digests_json }}
+      reuse_json: ${{ steps.plan.outputs.reuse_json }}
+      platform_lanes_todo_json: ${{ steps.plan.outputs.platform_lanes_todo_json }}
+      fast_reused: ${{ steps.plan.outputs.fast_reused }}
+      dylint_reused: ${{ steps.plan.outputs.dylint_reused }}
+      is-release: ${{ steps.release-profile.outputs.is-release }}
+      profile: ${{ steps.release-profile.outputs.profile }}
+      cache_save: ${{ steps.plan.outputs.cache_save }}
+      cache_key_pr: ${{ steps.plan.outputs.cache_key_pr }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pinned checkout runs on both GitHub and Bosn → act2.
+      - name: Checkout ci-lint (zackees/ci.yml, pinned -- ci.toml `linter`)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zackees/ci.yml
+          ref: 551cd2f29220787bed92002bf2de5822ae050159
+          path: .ci-lint
+          persist-credentials: false
+
+      - name: Run precheck
+        env:
+          PYTHONPATH: .ci-lint
+          PR_TITLE: ${{ inputs.pr-title }}
+        run: python3 -m ci_lint precheck --repo . --title "$PR_TITLE"
+
+      - name: Compute plan
+        id: plan
+        env:
+          PYTHONPATH: .ci-lint
+          PR_TITLE: ${{ inputs.pr-title }}
+          EVENT_NAME: ${{ inputs.event-name }}
+          DISPATCH_SHA: ${{ inputs.dispatch-sha }}
+          # `github.token` is a distinct expression context from
+          # `secrets.GITHUB_TOKEN` (SEC-001 only pattern-matches literal
+          # `secrets.*` references) -- same runtime token, read-only here
+          # (`actions: read` above), used only by `ci_lint plan --reuse`'s
+          # GET-only Actions API calls (ci_lint.reuse.compute_reuse).
+          GITHUB_TOKEN: ${{ github.token }}
+        # `--event "$GITHUB_EVENT_PATH"` is explicit here even though
+        # `zackees/ci.yml@551d909` (the pin above) already falls back to
+        # reading `GITHUB_EVENT_PATH` itself when `--event` is omitted (the
+        # fix for ghd#19's silent reuse failure --
+        # this step never passed `--event` before, so reuse's PR-head-SHA
+        # lookup always warned and matched nothing). Passing it explicitly
+        # keeps the dependency visible in this file instead of only inside
+        # ci-lint's fallback, and behaves identically under `act` (which
+        # also sets `GITHUB_EVENT_PATH`, per zackees/ci.yml#6 round-4B).
+        run: python3 -m ci_lint plan --repo . --event-name "$EVENT_NAME" --title "$PR_TITLE" --sha "$DISPATCH_SHA" --event "$GITHUB_EVENT_PATH" --github-output --reuse
+
+      # Round 5 (zackees/ci.yml#6 deliverable 2): a repo-local derived
+      # output, not a ci_lint one -- see ci/plan_profile.py's docstring for
+      # why this stays a template-side script rather than a planner change.
+      - name: Derive release-profile flag (round 5)
+        id: release-profile
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan }}
+        run: python3 ci/plan_profile.py
+
+  # zackees/ci.yml#23 §3/§4: the cache janitor runs on EVERY push, schedule,
+  # dispatch and closed PRs. Open same-repository PRs run the bounded trim
+  # in this job as well; maintenance stays outside the precheck commands. One repo-wide, non-cancelling lock (GEN-017) so
+  # two sweeps never race and a sweep is never cancelled mid-delete; no
+  # other job takes a lock or `needs:` this one (GEN-016), so a queued
+  # sweep never delays a check. Deletes: every entry of a closed/merged PR
+  # (`pr-<N>` key component or `refs/pull/<N>/merge`), CACHE-001/003/005/
+  # 006/009 entries (superseded generations, retired families such as
+  # `setup-soldr-dylint-output-v1`), and stale entries -- never an entry
+  # younger than ci-lint's 10-minute grace, never the newest base entry a
+  # required job restores. Prints a before/after table.
+  cache-janitor:
+    name: cache-janitor
+    if: github.event_name != 'pull_request' || github.event.action == 'closed' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      CI_REMOTE_ONLY: Maintains live GitHub Actions caches; local build caches are audited separately
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: cache-janitor
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pinned checkout runs on both GitHub and Bosn → act2.
+      - name: Checkout ci-lint (zackees/ci.yml, pinned -- ci.toml `linter`)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zackees/ci.yml
+          ref: 551cd2f29220787bed92002bf2de5822ae050159
+          path: .ci-lint
+          persist-credentials: false
+
+      - name: Trim stale PR compile-delta cache entries
+        if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          PYTHONPATH: .ci-lint
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -P -m ci_lint cache trim --repo . --max-deletes 20
+
+      - name: Janitor (closed PRs, superseded/retired/undeclared, stale)
+        if: github.event_name != 'pull_request' || github.event.action == 'closed'
+        env:
+          PYTHONPATH: .ci-lint
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -P -m ci_lint cache janitor --repo . --max-deletes 100
+
+  # zackees/ci.yml#23 §6: the budget verdict, independent of the janitor
+  # (no lock, no `needs:`). Hard failure over `[cache].budget` on main
+  # push/schedule/dispatch; warn-only on a PR unless the PR's own
+  # `pr-<N>` entries caused the breach.
+  cache-budget:
+    name: cache-budget
+    env:
+      CI_REMOTE_ONLY: Audits the live GitHub Actions cache budget
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pinned checkout runs on both GitHub and Bosn → act2.
+      - name: Checkout ci-lint (zackees/ci.yml, pinned -- ci.toml `linter`)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zackees/ci.yml
+          ref: 551cd2f29220787bed92002bf2de5822ae050159
+          path: .ci-lint
+          persist-credentials: false
+
+      # Bosn reports this live service audit as remote-only (GATE-012).
+      # The GitHub verdict remains required there; no local pass is inferred.
+      - name: Cache budget verdict
+        env:
+          PYTHONPATH: .ci-lint
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -P -m ci_lint cache budget --repo .

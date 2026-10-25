@@ -1,0 +1,257 @@
+name: "soldr setup"
+description: >-
+  The ONLY sanctioned `zackees/setup-soldr` call site in this repository
+  (ci.toml `[allow] setup-soldr.only-in`; ci-lint precheck group 4 rejects a
+  direct `zackees/setup-soldr@` step anywhere else). Bakes in the three
+  mandatory inputs ci.toml requires verbatim (`solo-toolchain-cache: false`,
+  `cook-delta: false`, `save-cache: auto`) so no caller can silently reenable
+  a retired cache family (`CACHE-009`), and exposes only the pass-through
+  inputs a lane actually needs.
+
+inputs:
+  dylint:
+    description: >-
+      Forwarded to setup-soldr's `dylint` input. "true" makes setup-soldr
+      resolve the requested nightly (see `dylint-toolchain` below), run
+      `soldr dylint prepare`, and export `SOLDR_DYLINT_SUCCESS_MARKER` /
+      `SOLDR_DYLINT_CONFIGURED_*` so a later `soldr dylint` invocation
+      writes a success marker the post step's save gate can match
+      (ci.yml#1, #6 §5d).
+    required: false
+    default: "false"
+  dylint-toolchain:
+    description: >-
+      Forwarded to setup-soldr's `dylint-toolchain`. Leave empty to let
+      setup-soldr auto-map this workspace's stable channel to a catalogued
+      nightly; set explicitly when that auto-mapped nightly has no
+      catalogued Dylint driver asset (confirmed for this workspace: the
+      auto-mapped nightly-2026-02-28 has none, but nightly-2026-05-28
+      does -- see `dylints/platform_boundary/rust-toolchain.toml`'s
+      comment and zackees/clud's working `_dylint.yml` for the working
+      pattern this mirrors). MUST equal every Dylint library's own pinned
+      nightly exactly.
+    required: false
+    default: ""
+  prebuild-deps:
+    description: >-
+      Forwarded to setup-soldr's `prebuild-deps`. Set "none" on the Dylint
+      lane: `soldr cook`'s prebuilt deps are cooked under this workspace's
+      STABLE toolchain and cannot warm a nightly Dylint compile, so
+      leaving the default ("soldr-cook") only produces a
+      "0 hit" cook-cache warning for zero benefit.
+    required: false
+    default: "soldr-cook"
+  dylint-targets:
+    description: >-
+      Forwarded to setup-soldr's `dylint-targets` (setup-soldr v0.9.83+,
+      ci.yml#9). Comma-separated cross target triples for cross-platform
+      Dylint check-only passes, in addition to the host. setup-soldr
+      prepares rust-std for each target and folds the target set into the
+      Dylint foundation/output cache identity, so `ci/dylint.py` no longer
+      has to call `soldr dylint prepare --target` itself.
+    required: false
+    default: ""
+  cross-target:
+    description: >-
+      One cross-compile target triple, forwarded to setup-soldr's
+      `cross-targets` (exactly one target per job upstream — a matrix or a
+      repeated call handles more than one).
+    required: false
+    default: ""
+  ci-tests:
+    description: >-
+      Forwarded to setup-soldr's `ci-tests` input. "true" declares this job's
+      output as the prescribed CI-test domain (soldr#2931): linked test
+      products, nextest archives, doctests and their debug sidecars are
+      never persisted by any cache layer, and a `build-cache-mode: full`
+      request is degraded to "thin" rather than silently snapshotting them.
+    required: false
+    default: "false"
+  prebuild-deps-flags:
+    description: >-
+      Forwarded to setup-soldr's `prebuild-deps-flags`. MUST match what the
+      job actually compiles (empty for dev/check/clippy/test/dylint jobs,
+      `--release` for a release-profile wheel build) or the cooked deps
+      cache is never reused. Default "" (dev profile: fmt/clippy/build/test
+      and the Dylint lane compile in dev, not release).
+    required: false
+    default: ""
+  verify-compile-cache:
+    description: >-
+      Forwarded to setup-soldr's `verify-compile-cache`. Set "error" on a
+      job whose whole point is proving compiles went through zccache (D8);
+      leave "off" elsewhere so a legitimate cache-free job (release
+      rehearsal dry runs) never fails on it.
+    required: false
+    default: "off"
+  compile-cache-stats:
+    description: Forwarded to setup-soldr's `compile-cache-stats`.
+    required: false
+    default: "summarize"
+  cache-key-suffix:
+    description: >-
+      Forwarded to setup-soldr's `cache-key-suffix`. Use this to give two
+      jobs on the same target their own cache identity (for example the
+      Dylint lane's dev-profile compile vs the fast lane's dev-profile
+      compile) when they must not share one key.
+    required: false
+    default: ""
+  cache-key-pr:
+    description: >-
+      The precheck plan's `cache_key_pr` output (`pr-<N>` on a
+      pull_request run, empty elsewhere; zackees/ci.yml#23 §5,
+      CACHE-013). Appended to `cache-key-suffix` ONLY when this step
+      actually saves (`save-cache == 'true'`), so a PR-context save (a
+      `ci-cache-save`-tagged PR) is keyed to its PR and the cache-janitor
+      deletes it once the PR closes -- while an ordinary PR run (which
+      never saves) keeps restoring main's un-suffixed entries warm.
+    required: false
+    default: ""
+  save-cache:
+    description: >-
+      Forwarded to setup-soldr's own save-cache (round-4B; ci.toml
+      [allow].setup-soldr.require.save-cache = "plan"). MUST be set by
+      every caller to an expression built from the precheck job's
+      cache_save output -- "true" only on a writer flow (main push,
+      nightly), "false" otherwise -- never left at this input's own
+      default or set to a literal. CACHE-009 enforces this statically:
+      it accepts a value here only when it is itself an expression
+      passing through THIS composite's own input (checked one level
+      further at each caller), or one built from the precheck plan
+      output directly. (Deliberately no literal GitHub Actions
+      expression-interpolation syntax in this description: the runner
+      evaluates that syntax found ANYWHERE in an action.yml file,
+      including inside a description string -- an earlier draft of
+      this text broke every caller with "Unrecognized named-value:
+      'needs'".)
+    required: true
+  cache:
+    description: >-
+      Forwarded to setup-soldr's own top-level `cache` umbrella switch
+      (round-4B-followup, the `init` job / ci.toml [suites].init: "the
+      `init` suite proves the template bootstraps from zero -- no cache
+      restore"). "false" disables every cache layer's restore AND save
+      outright (setup-soldr's own doc: forces every per-layer flag off
+      too); leave at the default "true" for every other caller.
+    required: false
+    default: "true"
+  preserve-source-mtimes:
+    description: >-
+      Forwarded to setup-soldr's own experimental `preserve-source-mtimes`
+      input (round-4C, ci.yml#6 §6 D3: "every workspace crate re-checks
+      after a restore because checkout mtimes are newer than restored
+      artifacts"). Snapshots each tracked Rust source file's (mtime, size,
+      content-hash) at cold-save time and replays the mtime on warm ONLY
+      when the current content is byte-identical -- a genuinely edited
+      file's mtime is left alone, so it still recompiles correctly. Set
+      "true" only where round-4C's measurement showed it correct (the
+      edited crate still rechecks) AND faster; default "false" everywhere
+      else.
+    required: false
+    default: "false"
+
+outputs:
+  build-cache-key:
+    description: >-
+      Primary key setup-soldr used for its own zccache compilation-cache
+      restore attempt this run (round-4C: the PR compile-delta wrapper's
+      `--base-key`/self-heal identity -- issue #6 §6 "A delta whose
+      b<hash> doesn't match the restored base is discarded").
+    value: ${{ steps.setup.outputs.build-cache-key }}
+  build-cache-path:
+    description: >-
+      Soldr-owned zccache compilation-cache directory on disk (round-4C:
+      the PR compile-delta wrapper's manifest/pack/apply target).
+    value: ${{ steps.setup.outputs.build-cache-path }}
+  cache-policy-json:
+    description: setup-soldr's resolved cache-layer policy, passed through for `ci_lint cache` evidence.
+    value: ${{ steps.setup.outputs.cache-policy-json }}
+  dylint-toolchain:
+    description: >-
+      The dated nightly setup-soldr resolved for Dylint mode (empty unless
+      `dylint` is `true`).
+    value: ${{ steps.setup.outputs.dylint-toolchain }}
+  dylint-cache-identity:
+    description: >-
+      `<nightly>|<rustc-release>|<rustc-commit>` — the exact string a
+      successful Dylint run must write to `$SOLDR_DYLINT_SUCCESS_MARKER`
+      for the post step to save `dylint-output-cache` (ci.yml#1's short-
+      vs-host-qualified identity bridge; D4).
+    value: ${{ steps.setup.outputs.dylint-cache-identity }}
+  dylint-output-cache-hit:
+    description: Whether the isolated Dylint project-output cache restored an exact key (D3/D4 evidence).
+    value: ${{ steps.setup.outputs.dylint-output-cache-hit }}
+  compile-cache-hits:
+    description: zccache session hit count (D8 evidence).
+    value: ${{ steps.setup.outputs.compile-cache-hits }}
+  compile-cache-misses:
+    description: zccache session miss count (D8 evidence).
+    value: ${{ steps.setup.outputs.compile-cache-misses }}
+  compile-cache-verification:
+    description: ok / invalid-measurement / skipped — set only when `verify-compile-cache` is not "off" (D8 evidence).
+    value: ${{ steps.setup.outputs.compile-cache-verification }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: setup-soldr
+      id: setup
+      uses: zackees/setup-soldr@v0 # fleet-sanctioned gated first-party moving ref
+      with:
+        # No `version:` input (zackees/ci.yml#18, RUST-013): float on
+        # setup-soldr's own latest-release resolution, matching pyproject.toml's
+        # floor-only `requires = ["soldr>=0.9.26"]` (the PEP 517 backend pin).
+        toolchain-file: "rust-toolchain.toml"
+        # ── Mandatory inputs (ci.toml [allow].setup-soldr.require) — fixed,
+        # never a pass-through, so a caller cannot silently reenable a
+        # retired family (CACHE-009) or a per-PR base save (#527/#5 RUST-010).
+        solo-toolchain-cache: "false"
+        cook-delta: "false"
+        # Round-4B-followup: the `init` job's own no-cache-restore
+        # requirement (see this action's `cache` input doc above).
+        cache: ${{ inputs.cache }}
+        # Round-4C (ci.yml#6 §6 D3): experimental source-mtime replay.
+        preserve-source-mtimes: ${{ inputs.preserve-source-mtimes }}
+        # Round-4B: plan-driven, not the fixed "auto" this used before.
+        # setup-soldr's own "auto" saves on every non-pull_request event,
+        # which is WRONG for `workflow_dispatch` (the release flow, never
+        # a cache writer per ci.toml [cache].write-on = ["main",
+        # "nightly"]) -- "auto" would save a release-rehearsal run's
+        # cache, "plan" (this input, passed through from every caller)
+        # never does. See this action's own `save-cache` input doc.
+        save-cache: ${{ inputs.save-cache }}
+        # ── Runtime bare-cargo guard (ci.yml#6 §4 "Evaluate soldr's
+        # bare-cargo trap-shim idea"). We did NOT copy soldr's own
+        # `.github/scripts/install_ci_cargo_guard.py`: it fails CLOSED
+        # (exit 86) and relies on `SOLDR_REAL_CARGO`, an escape hatch
+        # documented only for soldr's own internal CI to reach the real
+        # rustup Cargo without going back through the PATH-level trap.
+        # We also tried setup-soldr's OWN `shims: true` (reroute every
+        # bare cargo/rustc/etc through the installed soldr binary) as the
+        # external-facing analogue, and initially suspected (wrongly) that
+        # it broke soldr's own internal Dylint driver-source-build
+        # fallback (`SOLDR_ALLOW_DYLINT_DRIVER_BUILD=1` -- see the
+        # `dylint` job): that fallback spawns a nested `cargo build` in an
+        # isolated temp directory with no `rust-toolchain.toml` of its
+        # own, and hits "soldr requires a repo-pinned toolchain". Removing
+        # `shims: true` did NOT fix it (run 36487047790, job
+        # 109146426618: the exact same failure, same isolated-temp-dir
+        # shape, with `shims: true` absent) -- so this is a soldr-internal
+        # defect in the driver-source-build fallback itself, independent
+        # of this action's inputs. `shims: true` stays OFF (no proven
+        # benefit). Root-caused and avoided entirely: `dylint-toolchain`
+        # below requests a nightly the catalogue HAS a prebuilt driver
+        # for, so the from-source fallback (and this whole class of
+        # failure) is never triggered -- see the worker report for the
+        # upstream issue draft filed against the fallback anyway.
+        # ── Lane pass-throughs ──────────────────────────────────────────
+        dylint: ${{ inputs.dylint }}
+        dylint-toolchain: ${{ inputs.dylint-toolchain }}
+        prebuild-deps: ${{ inputs.prebuild-deps }}
+        cross-targets: ${{ inputs.cross-target }}
+        dylint-targets: ${{ inputs.dylint-targets }}
+        ci-tests: ${{ inputs.ci-tests }}
+        prebuild-deps-flags: ${{ inputs.prebuild-deps-flags }}
+        verify-compile-cache: ${{ inputs.verify-compile-cache }}
+        compile-cache-stats: ${{ inputs.compile-cache-stats }}
+        cache-key-suffix: ${{ inputs.save-cache == 'true' && inputs.cache-key-pr != '' && (inputs.cache-key-suffix != '' && format('{0}-{1}', inputs.cache-key-suffix, inputs.cache-key-pr) || inputs.cache-key-pr) || inputs.cache-key-suffix }}

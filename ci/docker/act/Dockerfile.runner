@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+
+# The act job-container image for the `ubuntu-24.04` runner label
+# (zackees/ci.yml#6 section 11, D7). Plain `catthehacker/ubuntu:act-24.04`
+# has no `clang`, which setup-soldr's linker shim needs -- observed
+# upstream as `exec: clang: not found` in zackees/clud PR #1541's act run.
+# This image is exactly that base plus `clang`, so the `fast` and `dylint`
+# lanes' setup-soldr steps (which install nothing else -- soldr's own
+# toolchain/cross-SDK layers are unaffected) can link.
+#
+# Built locally by ci/localrun/act_inner.py (`docker build -f
+# Dockerfile.runner ...`) right before each `act -P ubuntu-24.04=<tag>`
+# invocation, and reused (skipped) once already present -- see that
+# module's `_ensure_runner_image`. Never pushed anywhere: this is a
+# local-only image, referenced by tag, `--pull=false`.
+#
+# The base is pinned by the registry's multi-arch index digest (covers
+# amd64/arm64/armv7 -- `docker buildx imagetools inspect
+# catthehacker/ubuntu:act-24.04`, verified 2026-09-28), so this Dockerfile
+# is portable across host architectures without an ARG. `clang` itself
+# comes from Ubuntu 24.04's apt repositories; apt does not offer
+# reproducible sha256 pins the way a downloaded tarball does, so the
+# installed version is printed at build time (see the final RUN line,
+# visible in `docker build`'s log) as the practical record of what
+# landed -- the base image's digest is the strong pin.
+FROM catthehacker/ubuntu@sha256:c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43
+
+LABEL org.opencontainers.image.title="ghd-act-runner"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang \
+ && rm -rf /var/lib/apt/lists/* \
+ && clang --version

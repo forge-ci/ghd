@@ -1,0 +1,11 @@
+error: host-platform selection outside the ghd-platform boundary: direct concrete-tree reference `platform_imp`; the only allowed selection site is crates/private/ghd-platform/src/lib.rs, and native platform paths are additionally allowed under crates/private/ghd-platform/src/platforms/**
+  --> $DIR/disallowed_concrete_reference.rs:5:1
+   |
+LL | / fn uses_imp_tree() {
+LL | |     let platform_imp = ();
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(platform_boundary)]` on by default
+
+error: aborting due to 1 previous error
