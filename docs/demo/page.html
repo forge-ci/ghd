@@ -1,0 +1,148 @@
+<title>ghd in action</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column — thesis, the terminal as the hero, then three measured facts and the chapter list. */
+:root {
+  --bg: #f3f5f2; --fg: #17201b; --muted: #5b6760; --line: #d5dbd6;
+  --accent: #1f7a4d; --panel: #ffffff;
+  --term-bg: #0f1512; --term-fg: #d7e2db; --term-dim: #7f8f86; --term-green: #6fdc9b; --term-cyan: #6cc7d6;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0b100d; --fg: #e3ebe5; --muted: #95a39a; --line: #24302a; --accent: #6fdc9b; --panel: #121a16; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #0b100d; --fg: #e3ebe5; --muted: #95a39a; --line: #24302a; --accent: #6fdc9b; --panel: #121a16; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 40px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 28px; }
+h1 { font: 700 clamp(2rem, 5vw, 3rem)/1.05 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h1 code { font: inherit; color: var(--accent); }
+.lede { margin: 10px 0 0; color: var(--muted); max-width: 62ch; }
+.term { background: var(--term-bg); border-radius: 10px; overflow: hidden; border: 1px solid var(--line); min-width: 0; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #1f2a24; flex-wrap: wrap; }
+.bar .name { font: 600 12px var(--mono); color: var(--term-dim); margin-right: auto; }
+.bar button { font: 500 13px var(--body); color: var(--term-fg); background: #1a2420; border: 1px solid #2a3832; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.bar button:hover { border-color: var(--term-green); }
+.bar button:focus-visible { outline: 2px solid var(--term-green); outline-offset: 2px; }
+.bar button[aria-pressed="true"] { border-color: var(--term-green); color: var(--term-green); }
+.screen { margin: 0; padding: 16px 18px; height: min(62vh, 560px); overflow: auto; font: 13px/1.5 var(--mono); color: var(--term-fg); white-space: pre; }
+.b { font-weight: 600; } .c32 { color: var(--term-green); } .c36 { color: var(--term-cyan); }
+.cursor { display: inline-block; width: 0.6em; background: var(--term-green); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+.progress { height: 3px; background: #1a2420; } .progress i { display: block; height: 100%; width: 0; background: var(--term-green); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.fact { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.fact .n { font: 700 2rem/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.fact .n small { font: 500 0.95rem var(--body); color: var(--muted); }
+.fact p { margin: 6px 0 0; color: var(--muted); font-size: 0.95rem; }
+h2 { font: 600 1.25rem var(--display); margin: 0 0 10px; }
+ol.chapters { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+ol.chapters button { width: 100%; text-align: left; display: grid; grid-template-columns: 4.5em 1fr; gap: 12px; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: 15px var(--body); cursor: pointer; }
+ol.chapters button:hover, ol.chapters button:focus-visible { background: var(--panel); outline: none; box-shadow: inset 0 0 0 1px var(--line); }
+ol.chapters .t { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.note { color: var(--muted); font-size: 0.9rem; max-width: 70ch; margin: 0; }
+.note code, .fact code { font: 0.9em var(--mono); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1><code>ghd</code> in action</h1>
+    <p class="lede">A real terminal session, recorded 2026-10-24 against <code>talos-hq/clud</code> on GitHub: ten agents reading pull requests at once through the ghd daemon, then again a moment later, and the same read through plain <code>gh</code> for comparison.</p>
+  </header>
+
+  <section class="term" aria-label="Recorded terminal session">
+    <div class="bar">
+      <span class="name">bash — ghd demo</span>
+      <button id="play" type="button">Pause</button>
+      <button id="restart" type="button">Restart</button>
+      <button id="speed" type="button" aria-pressed="false">Speed 1×</button>
+    </div>
+    <div class="progress"><i id="prog"></i></div>
+    <pre class="screen" id="screen" tabindex="0"></pre>
+  </section>
+
+  <section class="facts" aria-label="Measured in this recording">
+    <div class="fact"><div class="n">3 <small>GraphQL points</small></div><p>for 11 cold reads across 6 PRs: requests for one repo that arrive together share one aliased query. <code>gh</code> spends one query per call, so 11.</p></div>
+    <div class="fact"><div class="n">0 <small>points</small></div><p>for the second round of 10 reads: 5 proven unchanged by ETag <code>304</code>s, which GitHub does not charge, and 5 served fresh.</p></div>
+    <div class="fact"><div class="n">5 ms <small>vs 476 ms</small></div><p>a fresh warm read through ghd, against the same read through <code>gh</code>. A read that needs revalidation costs one REST round trip, about 0.4 s.</p></div>
+  </section>
+
+  <section>
+    <h2>Chapters</h2>
+    <ol class="chapters" id="chapters"></ol>
+  </section>
+
+  <p class="note">Recorded with <code>script(1)</code>; the player replays its real output bytes. Pauses longer than 1.2 s are shortened, and each <code>time</code> line shows the real duration. The demo shortens the fresh window to 400 ms (<code>GHD_FRESH_MS</code>) so the second round falls outside it; the default is 2 s.</p>
+</div>
+
+<script id="cast" type="application/json">__CAST__</script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById("cast").textContent);
+  var events = data.events, total = events[events.length - 1][0];
+  var screen = document.getElementById("screen"), prog = document.getElementById("prog");
+  var playBtn = document.getElementById("play"), speedBtn = document.getElementById("speed");
+  var idx = 0, clock = 0, speed = 1, playing = true, last = null, cls = "";
+  var cursor = document.createElement("span"); cursor.className = "cursor"; cursor.textContent = " ";
+
+  function emit(text) {
+    var re = /\x1b\[([0-9;]*)m/g, m, at = 0;
+    while ((m = re.exec(text))) { put(text.slice(at, m.index)); sgr(m[1]); at = re.lastIndex; }
+    put(text.slice(at));
+  }
+  function sgr(codes) {
+    var parts = codes.split(";").filter(Boolean);
+    if (!parts.length || parts.indexOf("0") >= 0) { cls = ""; parts = parts.filter(function (p) { return p !== "0"; }); }
+    parts.forEach(function (p) { if (p === "1") cls += " b"; else if (p === "32" || p === "36") cls += " c" + p; });
+  }
+  function put(s) {
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "");
+    if (!s) return;
+    var span = document.createElement("span"); if (cls) span.className = cls.trim(); span.textContent = s;
+    screen.insertBefore(span, cursor);
+  }
+  function render(upTo) {
+    while (idx < events.length && events[idx][0] <= upTo) { emit(events[idx][1]); idx++; }
+    prog.style.width = Math.min(100, (upTo / total) * 100) + "%";
+    screen.scrollTop = screen.scrollHeight;
+  }
+  function reset() { screen.textContent = ""; screen.appendChild(cursor); idx = 0; clock = 0; cls = ""; }
+  function seek(t) { reset(); clock = t; render(t); }
+  function frame(now) {
+    if (playing) {
+      if (last !== null) clock += ((now - last) / 1000) * speed;
+      render(clock);
+      if (clock >= total) { playing = false; playBtn.textContent = "Replay"; }
+    }
+    last = now; requestAnimationFrame(frame);
+  }
+  playBtn.addEventListener("click", function () {
+    if (clock >= total) { seek(0); playing = true; }
+    else playing = !playing;
+    playBtn.textContent = playing ? "Pause" : "Play";
+  });
+  document.getElementById("restart").addEventListener("click", function () { seek(0); playing = true; playBtn.textContent = "Pause"; });
+  speedBtn.addEventListener("click", function () {
+    speed = speed === 1 ? 2 : speed === 2 ? 4 : 1;
+    speedBtn.textContent = "Speed " + speed + "×"; speedBtn.setAttribute("aria-pressed", String(speed !== 1));
+  });
+  var list = document.getElementById("chapters");
+  data.chapters.forEach(function (c) {
+    var li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = '<span class="t"></span><span></span>';
+    b.firstChild.textContent = c[0].toFixed(1) + " s"; b.lastChild.textContent = c[1];
+    b.addEventListener("click", function () { seek(Math.max(0, c[0] - 0.01)); playing = true; playBtn.textContent = "Pause"; screen.focus(); });
+    li.appendChild(b); list.appendChild(li);
+  });
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  reset();
+  if (reduce) { playing = false; render(total); playBtn.textContent = "Replay"; clock = total; }
+  requestAnimationFrame(frame);
+})();
+</script>

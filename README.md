@@ -2,6 +2,11 @@
 
 **One cached, batched, budget-aware gateway for `gh` reads.**
 
+[![ghd demo: ten concurrent gh pr view reads served from cache, batched GraphQL and free ETag revalidation](docs/assets/demo.gif)](https://forge-ci.github.io/ghd/)
+
+▶ **[Play the interactive demo](https://forge-ci.github.io/ghd/)**: a real
+recorded session against GitHub, with chapters and the numbers it measured.
+
 Agents that run `gh pr view`, `gh pr checks` and `gh api graphql` in loops
 share one 5,000-point/hour GitHub budget, and they routinely exhaust it
 (`GraphQL: API rate limit already exceeded for user ID …`). `ghd` puts a
@@ -17,8 +22,8 @@ $ ghd pr view 2138 -R talos-hq/clud --json number,state,title,mergedAt
 }
 ```
 
-The output has the same fields and values as `gh pr view --json`. A warm
-read takes about 15 ms; `gh` takes about 580 ms.
+The output has the same fields and values as `gh pr view --json`. A fresh
+read takes about 5 ms; `gh` takes about 480 ms (both measured in the demo).
 
 ## How it saves budget
 
