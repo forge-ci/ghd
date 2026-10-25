@@ -1,16 +1,46 @@
 # ghd
 
-**One cached, batched, budget-aware gateway for `gh` reads.**
+**A per-user daemon in front of the GitHub API, so agents that loop on `gh`
+stop burning the shared GraphQL budget.**
+
+[![CI](https://github.com/forge-ci/ghd/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/forge-ci/ghd/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [![ghd demo: ten concurrent gh pr view reads served from cache, batched GraphQL and free ETag revalidation](docs/assets/demo.gif)](https://forge-ci.github.io/ghd/)
 
 ▶ **[Play the interactive demo](https://forge-ci.github.io/ghd/)**: a real
 recorded session against GitHub, with chapters and the numbers it measured.
 
-Agents that run `gh pr view`, `gh pr checks` and `gh api graphql` in loops
-share one 5,000-point/hour GitHub budget, and they routinely exhaust it
-(`GraphQL: API rate limit already exceeded for user ID …`). `ghd` puts a
-per-user daemon in front of GitHub:
+## The problem
+
+Every `gh pr view`, `gh pr checks` and `gh api graphql` call spends points
+from one 5,000-point/hour GraphQL budget per user. A handful of agents
+polling PRs in loops drain it, and then everyone sees
+`GraphQL: API rate limit already exceeded for user ID …`.
+
+## Before / after
+
+|  | `gh` | `ghd` |
+|---|---|---|
+| Command | `gh pr view 2138 --json state,title` | `ghd pr view 2138 --json state,title` |
+| Output | gh's JSON | the same fields and values |
+| Fresh read latency | ~480 ms | **~5 ms** |
+| 10 concurrent reads (5 PRs × 2), cold | ~10 points | **2 points** |
+| The same 10 reads, warm | ~10 points | **0 points** |
+
+Numbers come from the demo and the spike. In a live check on 2026-10-25, one
+`ghd api graphql` call went upstream, and 5 parallel identical calls after
+it were all served `fresh`.
+
+## Quickstart
+
+```sh
+# Run straight from git (pin a commit SHA for reproducibility):
+uvx --from git+https://github.com/forge-ci/ghd@<sha> ghd --help
+
+# Or install it as a tool:
+uv tool install git+https://github.com/forge-ci/ghd
+```
 
 ```console
 $ ghd pr view 2138 -R talos-hq/clud --json number,state,title,mergedAt
@@ -22,38 +52,38 @@ $ ghd pr view 2138 -R talos-hq/clud --json number,state,title,mergedAt
 }
 ```
 
-The output has the same fields and values as `gh pr view --json`. A fresh
-read takes about 5 ms; `gh` takes about 480 ms (both measured in the demo).
+The daemon starts itself on first use; there is nothing to configure.
+
+> **PyPI:** the `ghd` name on PyPI is only a 0.0.0 reservation today.
+> `pip install ghd` will work with the first real release.
 
 ## How it saves budget
 
-A read is answered by the cheapest step that can prove the data is fresh:
+```mermaid
+flowchart LR
+    A[agents / scripts] -->|ghd ...| C[ghd CLI]
+    C -->|loopback HTTP + protobuf + bearer token| D[ghd daemon]
+    D --> F{fresh? <2 s}
+    F -->|yes: 0 points| C
+    F -->|no| E[REST ETag check]
+    E -->|304: free| C
+    E -->|changed| B[batched GraphQL<br/>one query per repo per 50 ms]
+    B --> G[(api.github.com)]
+```
+
+A `pr view` is answered by the cheapest step that can prove the data fresh:
 
 | step | cost | when |
 |---|---|---|
-| `fresh` | 0 | validated in the last 2 s; concurrent identical reads wait on one per-PR lock |
+| `fresh` | 0 | validated in the last 2 s (`GHD_FRESH_MS`); concurrent identical reads wait on one per-PR lock |
 | `revalidated` | **0** | the PR's REST ETag returns `304 Not Modified`, which GitHub does not count against the rate limit |
 | `fetched` | ~1 GraphQL point **per batch** | every PR of one repo requested within 50 ms goes into **one** aliased GraphQL query |
 
-Measured in the spike (10 concurrent reads = 5 PRs × 2): the cold round
-cost 2 GraphQL points (`gh` would spend ~10), and the warm round cost
-0, with the REST counter unchanged.
+`ghd api graphql` uses the same idea for arbitrary queries: identical
+concurrent queries share one upstream call, and an answer is reused for the
+fresh window, which is exactly what an agent's re-check loop hits.
 
-## Install
-
-```sh
-pip install ghd        # or: uv tool install ghd
-```
-
-The wheel bundles the native `ghd` binary (no Python launcher in front of
-it) and a PyO3 extension for Python callers:
-
-```python
-from ghd.bindings import pr_view
-pr_view("talos-hq/clud", 2138, ["state", "mergeable"])
-```
-
-## Usage
+## Command reference
 
 ```text
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
@@ -63,31 +93,68 @@ ghd daemon                                          run the daemon (auto-started
 ghd --version | --help
 ```
 
-- Without `-R`, the repository comes from the `origin` remote, as with `gh`.
-- `ghd api graphql` takes gh's `-f` (string) and `-F` (typed, `@file`)
-  fields and prints GitHub's body. Identical concurrent queries make one
-  upstream call, and an answer is reused for the fresh window
-  (`GHD_FRESH_MS`, 2 s), which is what agents' re-check loops hit.
-  Mutations always go upstream and clear the query cache. An `errors`
-  body is printed, and the command exits 1, as with gh.
-- `GHD_DEBUG=1` prints which step answered each read.
-- The daemon starts itself on first use. One start lock means concurrent
-  cold clients start exactly one daemon.
-- The daemon authenticates with `GH_TOKEN`, `GITHUB_TOKEN` or `gh auth token`.
+**`ghd pr view`**
+- Same output as `gh pr view --json`. Without `-R`, the repository comes
+  from the `origin` remote, as with `gh`.
 - Supported `--json` fields so far are the plain scalars: `additions`,
   `baseRefName`, `body`, `changedFiles`, `closed`, `closedAt`, `createdAt`,
   `deletions`, `headRefName`, `headRefOid`, `id`, `isDraft`,
   `mergeStateStatus`, `mergeable`, `mergedAt`, `number`, `state`, `title`,
-  `updatedAt` and `url`. See [DESIGN.md](DESIGN.md) for the roadmap:
-  checks, lists, issues, writes and watches.
+  `updatedAt` and `url`.
+
+**`ghd api graphql`**
+- Takes gh's `-f` (string) and `-F` (typed, `@file`) fields and prints
+  GitHub's body.
+- Queries are deduplicated and cached for the fresh window.
+- Mutations always go upstream and clear the query cache, so no read
+  returns data from before a write.
+- A body with `errors` is printed and the command exits 1, as with gh.
+
+**`ghd stats`** prints the daemon's counters as JSON: `reads`,
+`served_fresh`, `sentinel_304_free`, `sentinel_200`, `graphql_queries`,
+`graphql_prs_fetched`, `graphql_points_spent`, `api_graphql_upstream`,
+`api_graphql_served_fresh`, `graphql_remaining`, `core_remaining` and
+`uptime_secs`.
+
+**`ghd daemon`** runs the daemon in the foreground. You rarely need it: one
+start lock means concurrent cold clients start exactly one daemon.
+
+## Configuration
+
+| variable | effect |
+|---|---|
+| `GHD_FRESH_MS` | fresh window in milliseconds (default 2000), read once at daemon start |
+| `GHD_DEBUG` | when set, prints which step (`fresh`, `revalidated`, `fetched`) answered each read |
+| `GHD_EXE` | the `ghd` executable used to start the daemon, if not the current one |
+| `GH_TOKEN` / `GITHUB_TOKEN` | the token the daemon uses; falls back to `gh auth token` |
+
+## Use it with agents
+
+The point of `ghd` is to sit under tools that call GitHub in loops. A real
+consumer: [obs-rust/obs-studio](https://github.com/obs-rust/obs-studio)
+routes every GraphQL call through
+
+```sh
+uv run --no-project --script ci/gh_graphql.py ...
+```
+
+which wraps `ghd`, and its agent PreToolUse hook bans bare
+`gh api graphql`, so no agent session can bypass the cache by accident.
+The same pattern works anywhere:
+
+1. Pin `ghd` with `uvx --from git+https://github.com/forge-ci/ghd@<sha> ghd`.
+2. Point your scripts' `gh pr view --json` and `gh api graphql` calls at it.
+3. Add a hook or lint rule that rejects the bare `gh` forms.
+4. Watch `ghd stats` to see what was saved.
+
+Python callers can also use the bundled extension:
+
+```python
+from ghd.bindings import pr_view
+pr_view("talos-hq/clud", 2138, ["state", "mergeable"])
+```
 
 ## Architecture
-
-```
-ghd (CLI, std-only client) --loopback HTTP + protobuf + bearer token--> ghd daemon
-                                                          |
-                     per-PR cache -> REST ETag sentinel -> batched GraphQL -> api.github.com
-```
 
 | crate | role |
 |---|---|
@@ -98,12 +165,15 @@ ghd (CLI, std-only client) --loopback HTTP + protobuf + bearer token--> ghd daem
 | `crates/private/ghd-daemon` | loopback server, cache, sentinels, GraphQL batcher |
 | `crates/private/ghd-platform` | the only crate with host-specific code (`cfg_select!` once) |
 
+- The CLI client is std-only; it talks to the daemon over loopback HTTP with
+  protobuf bodies and a bearer token.
 - The daemon is built on [kernal-api](https://crates.io/crates/kernal-api)
   (async engine, HTTP client and server, JSON, secure random). No crate
   names tokio, reqwest or hyper directly.
 - Every third-party dependency is pinned with `=`.
-- More detail: [DESIGN.md](DESIGN.md), [crates/README.md](crates/README.md)
-  and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- More: [DESIGN.md](DESIGN.md) (including the roadmap: checks, lists,
+  issues, writes and watches), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+  and [crates/README.md](crates/README.md).
 
 ## Development
 
@@ -113,21 +183,18 @@ ghd (CLI, std-only client) --loopback HTTP + protobuf + bearer token--> ghd daem
 uv run --no-project --script ci/local.py precheck   # ci-lint precheck (also a hook)
 ```
 
-CI is declared, not scripted. [`ci.toml`](ci.toml) (schema 3, profile
+CI is declared, not scripted: [`ci.toml`](ci.toml) (profile
 `rust-pypi-app`) is the contract, checked by
-[`ci-lint`](https://github.com/zackees/ci.yml). This repo was instantiated
-from the fleet reference repo
-[`zackees/template-python-rust-cmd`](https://github.com/zackees/template-python-rust-cmd),
-so its gates, hooks and entry points are described in [CLAUDE.md](CLAUDE.md).
+[`ci-lint`](https://github.com/zackees/ci.yml). Repo rules, gates and hooks
+are in [CLAUDE.md](CLAUDE.md).
 
 ## Releases
 
-Releases are automatic: merge a commit to main that bumps
-`[workspace.package].version` in `Cargo.toml` and `version` in
-`pyproject.toml`. It then builds every platform's wheel, verifies them,
-tags the commit and publishes to PyPI with no stored secrets. See
-[RELEASE.md](RELEASE.md).
+Merge a commit to main that bumps `[workspace.package].version` in
+`Cargo.toml` and `version` in `pyproject.toml`. CI then builds every
+platform's wheel, verifies them, tags the commit and publishes to PyPI with
+no stored secrets. See [RELEASE.md](RELEASE.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
