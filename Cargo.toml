@@ -5,6 +5,7 @@ members = [
     "crates/ghd-cli",
     "crates/ghd-py",
     "crates/private/ghd-core",
+    "crates/private/ghd-cross-pure",
     "crates/private/ghd-daemon",
     "crates/private/ghd-platform",
 ]
@@ -22,7 +23,8 @@ anyhow = "1"
 # Exact pins (obs-rust #2056 convention): behaviour cannot drift under a
 # lockfile refresh. kernal-api is the only async/HTTP/JSON facade; no crate
 # here names tokio, reqwest, hyper or serde directly.
-kernal-api = { version = "=0.1.31", features = ["http-client", "http-server", "json", "secure-random"] }
+# The HTTP client's TLS backend is chosen per target in ghd-daemon's manifest.
+kernal-api = { version = "=0.1.32", features = ["http-server", "json", "secure-random"] }
 prost = { version = "=0.14.1", default-features = false, features = ["derive", "std"] }
 pyo3 = { version = "0.29.2", features = ["extension-module", "abi3-py310"] }
 
@@ -80,3 +82,9 @@ targets = [
 # `soldr ci-test` discover it.
 [workspace.metadata.dylint]
 libraries = [{ path = "dylints/platform_boundary" }]
+
+# Bridge until kernal-api 0.1.32 (first release with `http-client-rustls`) is
+# on crates.io: remove this table once it is published. Pinned to an exact
+# kernal-api main commit.
+[patch.crates-io]
+kernal-api = { git = "https://github.com/forge-ci/kernal-api", rev = "79b60ffa1f85b834c7096b679929c54862313a15" }

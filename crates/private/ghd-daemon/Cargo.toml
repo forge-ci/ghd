@@ -20,3 +20,14 @@ doctest = false
 ghd-core = { path = "../ghd-core" }
 kernal-api = { workspace = true }
 prost = { workspace = true }
+
+# TLS backend per target (kernal-api#427). Linux: rustls, because native TLS
+# there is OpenSSL -- openssl-sys needs per-arch target headers, which the
+# Dylint cross-target check and the musl release builds do not have. macOS and
+# Windows: the platform's own TLS (Security.framework / SChannel), pure-Rust
+# FFI with no C build step, so cross-target checks need no C toolchain.
+[target.'cfg(target_os = "linux")'.dependencies]
+kernal-api = { workspace = true, features = ["http-client-rustls"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+kernal-api = { workspace = true, features = ["http-client"] }

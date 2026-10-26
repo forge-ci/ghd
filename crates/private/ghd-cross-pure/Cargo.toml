@@ -1,0 +1,26 @@
+[lints]
+workspace = true
+
+[package]
+name = "ghd-cross-pure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Build-graph switch: turns on blake3 `pure` (no C/asm) for macOS/Windows in workspace-wide invocations."
+publish = false
+
+[lib]
+test = false
+doctest = false
+
+# blake3 (via kernal-api) compiles C/asm SIMD for every target. The Dylint
+# lane checks macOS/Windows from a Linux host with no C toolchain for them.
+# This member is selected only by `--workspace` invocations (Dylint, lint,
+# tests); Cargo feature unification then enables `pure` there. Release
+# artifacts are built from `-p ghd`/`ghd-cli`/`ghd-py`, never select this
+# crate, and keep SIMD. Pin matches Cargo.lock / kernal-api.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+blake3 = { version = "=1.8.7", default-features = false, features = ["pure"] }
