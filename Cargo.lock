@@ -308,10 +308,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ghd-daemon"
+name = "ghd-cross-pure"
 version = "0.1.0"
 dependencies = [
  "blake3",
+]
+
+[[package]]
+name = "ghd-daemon"
+version = "0.1.0"
+dependencies = [
  "ghd-core",
  "kernal-api",
  "prost",

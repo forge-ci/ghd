@@ -5,6 +5,7 @@ members = [
     "crates/ghd-cli",
     "crates/ghd-py",
     "crates/private/ghd-core",
+    "crates/private/ghd-cross-pure",
     "crates/private/ghd-daemon",
     "crates/private/ghd-platform",
 ]

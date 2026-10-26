@@ -31,14 +31,3 @@ kernal-api = { workspace = true, features = ["http-client-rustls"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 kernal-api = { workspace = true, features = ["http-client"] }
-
-# blake3 (via kernal-api) builds C/asm SIMD for every target. The Dylint lane
-# checks macOS/Windows from a Linux host, which has no C toolchain for them, so
-# ci/dylint.py enables `dylint-cross-pure` on that pass only (feature
-# unification turns on blake3 `pure`). Native release builds never enable it
-# and keep SIMD. Pin matches Cargo.lock / kernal-api.
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-blake3 = { version = "=1.8.7", optional = true, default-features = false, features = ["pure"] }
-
-[features]
-dylint-cross-pure = ["dep:blake3"]

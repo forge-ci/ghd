@@ -187,10 +187,6 @@ def _run_multi_target(
         cmd = ["soldr", "dylint", "--all", "--", "--workspace", "--all-targets"]
         for target in group:
             cmd += ["--target", target.triple]
-        if group is other:
-            # blake3 `pure`: no C/asm for targets this Linux host has no C
-            # toolchain for. Release builds never enable this feature.
-            cmd += ["--features", "ghd-daemon/dylint-cross-pure"]
         rc, seconds = _run(cmd)
         # The host target is covered by the first pass (as before the split).
         lead = () if results else (host.triple,)
