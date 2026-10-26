@@ -143,12 +143,30 @@ def _should_skip_dir(name: str) -> bool:
     return name in EXCLUDE_DIR_NAMES
 
 
+# A `.cargo/` dir's vendor/registry state is excluded, but its checked-in
+# config is source: a Dylint lint crate's `.cargo/config.toml` sets
+# `linker=dylint-link`, without which cargo-dylint never finds the
+# toolchain-stamped `lib<name>@<toolchain>.so` ("despite successful build").
+_CARGO_CONFIG_FILES = ("config.toml", "config")
+
+
+def _copy_cargo_config(src: Path, dst: Path) -> None:
+    for name in _CARGO_CONFIG_FILES:
+        cfg = src / name
+        if cfg.is_file() and not cfg.is_symlink():
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cfg, dst / name)
+
+
 def _copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         raise InstantiateError(f"--out {dst} already exists; refusing to overwrite")
     dst.mkdir(parents=True)
     for entry in sorted(src.iterdir()):
         if entry.is_dir():
+            if entry.name == ".cargo":
+                _copy_cargo_config(entry, dst / entry.name)
+                continue
             if _should_skip_dir(entry.name):
                 continue
             _copy_tree(entry, dst / entry.name)
