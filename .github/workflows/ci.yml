@@ -475,6 +475,7 @@ jobs:
         # native TLS and compile no C.
         env:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
         run: python3 ci/dylint.py --shape multi-target --results-out ${{ runner.temp }}/dylint-results.json
 
   # Job id MUST be exactly "platform-build" (ci_lint gate's required-job-id

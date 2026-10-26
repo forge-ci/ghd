@@ -173,13 +173,30 @@ def _run_multi_target(
     sequential pass (see the clud macOS-vs-Windows half-cost hint in
     ci.yml#6 comment 3). Not proven upstream (clud only ever runs
     sequential, one `--target` per invocation); measured here and picked
-    only if it is both correct and faster."""
-    cmd = ["soldr", "dylint", "--all", "--", "--workspace", "--all-targets"]
-    for target in cross:
-        cmd += ["--target", target.triple]
-    rc, seconds = _run(cmd)
-    all_triples = tuple([host.triple] + [t.triple for t in cross])
-    return [DylintPassResult("multi-target", all_triples, tuple(cmd), seconds, rc)]
+    only if it is both correct and faster.
+
+    One invocation per OS family, not one for every target: cargo unifies
+    features across all `--target`s of a single invocation, and ghd-daemon
+    picks its TLS backend per target (rustls on Linux, native TLS elsewhere).
+    Mixing families would turn native TLS -- OpenSSL -- back on for the Linux
+    targets, which have no per-arch OpenSSL headers here."""
+    linux = [t for t in cross if "-linux-" in t.triple]
+    other = [t for t in cross if "-linux-" not in t.triple]
+    results: list[DylintPassResult] = []
+    for group in (g for g in (linux, other) if g):
+        cmd = ["soldr", "dylint", "--all", "--", "--workspace", "--all-targets"]
+        for target in group:
+            cmd += ["--target", target.triple]
+        rc, seconds = _run(cmd)
+        # The host target is covered by the first pass (as before the split).
+        lead = () if results else (host.triple,)
+        triples = lead + tuple(t.triple for t in group)
+        results.append(
+            DylintPassResult("multi-target", triples, tuple(cmd), seconds, rc)
+        )
+        if rc != 0:
+            return results
+    return results
 
 
 def main(argv: list[str] | None = None) -> int:
