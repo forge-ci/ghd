@@ -311,6 +311,7 @@ dependencies = [
 name = "ghd-daemon"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "ghd-core",
  "kernal-api",
  "prost",
