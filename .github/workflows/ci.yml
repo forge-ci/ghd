@@ -466,6 +466,16 @@ jobs:
           preserve-source-mtimes: "false"
 
       - name: Dylint -- host + every declared cross target
+        # TLS is rustls (kernal-api `http-client-rustls`), whose `ring` build
+        # script compiles C even under `cargo check`. The runner's gcc only
+        # targets the host; clang takes `--target` and builds ring for every
+        # cross triple with no sysroot. Keep in sync with ci.toml [platforms].
+        env:
+          CC_aarch64_unknown_linux_gnu: clang
+          CC_x86_64_pc_windows_msvc: clang
+          CC_aarch64_pc_windows_msvc: clang
+          CC_x86_64_apple_darwin: clang
+          CC_aarch64_apple_darwin: clang
         run: python3 ci/dylint.py --shape multi-target --results-out ${{ runner.temp }}/dylint-results.json
 
   # Job id MUST be exactly "platform-build" (ci_lint gate's required-job-id
