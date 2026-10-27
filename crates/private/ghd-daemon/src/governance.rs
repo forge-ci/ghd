@@ -115,7 +115,7 @@ impl Control {
     }
     pub(crate) fn answer(&self, source: &str) {
         match source {
-            "fresh" => self.event(&caller(), Event::Hit),
+            "fresh" | "shared" => self.event(&caller(), Event::Hit),
             "revalidated" => self.event(&caller(), Event::Revalidated),
             _ => {}
         }

@@ -377,3 +377,37 @@ original behavior and are not intercepted. It does not claim a machine-wide
 proxy, per-caller quotas or a priority scheduler. Selected native integration
 commands run the whole installed-test directory; unmarked controlled-cache
 tests also keep their existing routine fast-lane coverage.
+
+## Repository snapshot protocol
+
+`ghd-core::snapshot` owns flag parsing, the read-only GraphQL selection,
+repository validation and JSON schema-v1 envelope. CLI and PyO3 send
+`SnapshotRequest` version 1 to `/v2/snapshot`; an old daemon cannot silently
+ignore authority flags on an older generic read route. Repository and identity
+hosts must agree. Backend environment/program/caller context uses the existing
+read binding and cache-key helpers.
+
+The daemon keeps a fifth retained slot type for snapshots. A slot serializes
+ordinary callers, including callers arriving during the initial fetch, and
+charges its body to the existing global LRU. It retains the original epoch
+and checks the coherence journal before returning either fresh or stale data.
+Fresh requests bypass every retained body, take essential governor admission
+and invoke real gh with HTTP no-cache headers. No snapshot uses the generic
+GraphQL cache or optional durable body store. Origin no-store forbids retention;
+origin no-cache/max-age constrain ordinary reuse.
+
+The document has `schema: 1`, `repository` (raw selected GraphQL fields),
+`truncated` and `freshness`. Freshness includes `source` (fetched, shared, fresh,
+stale), `stale`, nullable `age_ms`, receipt `captured_at_ms` and `reason`.
+Repository connections preserve pagination/cursors/counts. Any unselected page
+or count beyond selected nodes marks the document truncated. GraphQL partial
+errors, missing pagination, wrong repository and mismatched PR/check commit
+identity refuse the result. A null default branch and absent check rollup are
+valid. No automatic pagination or completeness assertion is made.
+
+Positive upstream Age, Warning 110 and stale gate headers prevent an authority
+result. An unknown downstream age stays null. Without explicit planning opt-in,
+an expired body plus upstream failure returns code 3 with no JSON. Opt-in can
+return the old body with increasing age and a bounded reason, but cannot cross
+a mutation epoch. Fresh and stale-planning options are mutually exclusive.
+Transport/configuration errors remain distinct from service freshness refusal.

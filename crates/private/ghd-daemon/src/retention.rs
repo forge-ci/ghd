@@ -13,6 +13,7 @@ pub(crate) enum CachedSlot {
     Graphql(GraphqlSlot),
     Gh(Arc<Mutex<Option<gh_reads::Entry>>>),
     Rest(Arc<Mutex<Option<rest_reads::Entry>>>),
+    Snapshot(Arc<Mutex<Option<crate::snapshots::Entry>>>),
 }
 
 impl CachedSlot {
@@ -22,6 +23,7 @@ impl CachedSlot {
             (Self::Graphql(a), Self::Graphql(b)) => Arc::ptr_eq(a, b),
             (Self::Gh(a), Self::Gh(b)) => Arc::ptr_eq(a, b),
             (Self::Rest(a), Self::Rest(b)) => Arc::ptr_eq(a, b),
+            (Self::Snapshot(a), Self::Snapshot(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -121,4 +123,14 @@ pub(crate) async fn admit(state: &State) -> io::Result<kernal_api::async_engine:
             "cache read capacity is busy; retry",
         )
     })
+}
+
+pub(crate) async fn snapshot(
+    state: &State,
+    key: &str,
+) -> Arc<Mutex<Option<crate::snapshots::Entry>>> {
+    match slot(state, key, CachedSlot::Snapshot(Arc::default())).await {
+        CachedSlot::Snapshot(slot) => slot,
+        _ => unreachable!("cache namespace"),
+    }
 }

@@ -158,3 +158,17 @@ references removed concepts is worse than no procedure.
   without changing body sharing; retain separate provider and estimate metrics.
 - Run the complete installed cache-test directory on explicitly selected native
   integration lanes while preserving ordinary fast-lane coverage.
+
+## ghx parity: repository snapshots and explicit freshness (#13)
+
+- Add `ghd snapshot` and `ghd.bindings.snapshot` through one versioned protobuf
+  operation and shared GraphQL selection, with bounded open PRs, default branch,
+  reviews, changed files and check contexts. Preserve pagination evidence and
+  expose aggregate truncation.
+- Coalesce ordinary reads inside the shared retention/governance/coherence
+  boundaries. Explicit fresh reads bypass the cache window and request origin
+  revalidation; failures and marked stale responses return code 3 without JSON.
+- Require explicit stale-planning opt-in, with source, age (nullable), reason
+  and capture timestamp in schema-v1 output. Snapshot bodies remain memory-only.
+- Verify the #12 fixture correction in hosted run 40506918999: the complete
+  selected integration directory passes on Windows/macOS x64/ARM64, with CI OK.

@@ -374,3 +374,42 @@ no stored secrets. See [RELEASE.md](RELEASE.md).
 ## License
 
 [MIT](LICENSE)
+
+## Repository planning snapshots
+
+`ghd snapshot -R owner/repo` returns one schema-v1 JSON document with the
+default branch, open PR heads, reviews, changed files and head check contexts.
+Use `--hostname host` or a host-qualified repository for Enterprise. `GH_REPO`
+can supply the repository; this command does not infer it from Git.
+`--limit 1..100` bounds open PRs (default 100). Nested selections are bounded
+too; inspect `truncated`, connection `totalCount` and `pageInfo` before treating
+any selection as complete. An empty repository has a null default branch.
+
+Ordinary concurrent reads share the identity/repository/backend cache window.
+`ghd snapshot -R owner/repo --fresh` always dispatches a new upstream request
+with revalidation headers, bypassing the daemon window and real gh's API cache.
+Origin failure or explicitly stale downstream output produces exit 3, no JSON,
+and a diagnostic on stderr. Input/transport errors use exit 1. No client can
+force an intermediary that ignores HTTP revalidation to disclose its age.
+
+For planning during an outage, `--allow-stale` explicitly permits a retained
+body or a downstream-marked stale response. Accepted output exits 0 and carries
+`freshness.source`, `stale`, `age_ms` (null when unknown), `captured_at_ms` and
+`reason`. It cannot be combined with `--fresh`. A mutation generation change
+still invalidates retained planning data. Snapshot bodies are memory-only,
+share the global retention limits, and respect origin storage/freshness policy.
+`GHD_CACHE_TTLS='{"snapshot read":1000}'` changes the ordinary window.
+
+Python uses the same implementation:
+
+```python
+from ghd.bindings import snapshot
+
+result = snapshot("owner/repo", fresh=True)
+if result.exit_code == 0:
+    document = result.data
+```
+
+`SnapshotResult` preserves JSON bytes, exit code, source, age, stale/truncation
+flags and the refusal diagnostic. Configuration/transport errors raise
+`OSError`; a freshness refusal returns exit code 3 and `data is None`.

@@ -33,6 +33,65 @@ import json, os, subprocess, sys, urllib.request
 from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 args = sys.argv[1:]
+if args[:2] == ["api", "graphql"] and any("GhdSnapshotV1" in arg for arg in args):
+    with open(TRACE_PATH, "a", encoding="utf-8") as trace:
+        trace.write(json.dumps(args) + "\n")
+    fixture_root = Path(TRACE_PATH).parent
+    if (fixture_root / "snapshot-fail").exists():
+        print('HTTP/1.1 503 unavailable\n\n{"message":"fixture unavailable"}')
+        print('fixture snapshot unavailable', file=sys.stderr)
+        raise SystemExit(1)
+    def option(name, default):
+        return next((arg.split("=", 1)[1] for arg in args if arg.startswith(name + "=")), default)
+    def connection(nodes):
+        return {"nodes": nodes, "totalCount": len(nodes), "pageInfo": {
+            "hasNextPage": False, "hasPreviousPage": False,
+            "startCursor": "start" if nodes else None, "endCursor": "end" if nodes else None}}
+    def rollup():
+        return {"state": "SUCCESS", "contexts": connection([
+            {"__typename": "CheckRun", "databaseId": 7, "name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"__typename": "StatusContext", "context": "external", "state": "SUCCESS", "targetUrl": "https://example.invalid/status"}])}
+    title = (fixture_root / "snapshot-title").read_text(encoding="utf-8") if (fixture_root / "snapshot-title").exists() else "snapshot title"
+    pr = {"number": 42, "title": title, "headRefOid": "abc", "headRefName": "feature",
+          "baseRefOid": "main-oid", "baseRefName": "main", "state": "OPEN", "isDraft": False,
+          "files": connection([{"path": "src/app.rs", "additions": 1, "deletions": 0}]),
+          "reviews": connection([{"state": "APPROVED", "author": {"login": "reviewer"}, "commit": {"oid": "abc"}}]),
+          "commits": connection([{"commit": {"oid": "abc", "committedDate": "2026-01-01T00:00:00Z", "statusCheckRollup": rollup()}}])}
+    repo = {"nameWithOwner": option("owner", "o") + "/" + option("name", "r"), "isPrivate": False,
+            "defaultBranchRef": {"name": "main", "target": {"oid": "main-oid", "statusCheckRollup": rollup()}},
+            "pullRequests": connection([pr])}
+    if (fixture_root / "snapshot-empty").exists():
+        repo["defaultBranchRef"] = None
+        repo["pullRequests"] = connection([])
+    if (fixture_root / "snapshot-truncated").exists():
+        pr["reviews"]["pageInfo"].update(hasPreviousPage=True, startCursor="older-reviews")
+        pr["reviews"]["totalCount"] = 101
+    if (fixture_root / "snapshot-root-truncated").exists():
+        repo["pullRequests"]["pageInfo"].update(hasNextPage=True, endCursor="more-prs")
+        repo["pullRequests"]["totalCount"] = 101
+    if (fixture_root / "snapshot-missing-pages").exists():
+        del repo["pullRequests"]["pageInfo"]
+    if (fixture_root / "snapshot-head-mismatch").exists():
+        pr["headRefOid"] = "different-head"
+    if (fixture_root / "snapshot-no-checks").exists():
+        pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = None
+    print('HTTP/1.1 200 OK')
+    policy_file = fixture_root / "snapshot-cache-control"
+    print('Cache-Control: ' + (policy_file.read_text() if policy_file.exists() else 'private, max-age=60'))
+    print('X-RateLimit-Resource: graphql\nX-RateLimit-Remaining: 5000\nX-RateLimit-Reset: 4102444800')
+    if (fixture_root / "snapshot-stale").exists():
+        print('X-Ghgate-Stale: true\nAge: 120')
+    if (fixture_root / "snapshot-stale-no-age").exists():
+        print('X-Ghgate-Stale: true')
+    age_file = fixture_root / "snapshot-age"
+    if age_file.exists():
+        print('Age: ' + age_file.read_text())
+    print()
+    body = {"data": {"repository": repo}}
+    if (fixture_root / "snapshot-partial-error").exists():
+        body["errors"] = [{"message": "fixture GraphQL partial error"}]
+    print(json.dumps(body))
+    raise SystemExit(0)
 collection = len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/actions/runs?")
 if args[:2] == ["api", "fixture/body"] or collection:
     with open(TRACE_PATH, "a", encoding="utf-8") as trace:

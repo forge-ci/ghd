@@ -20,6 +20,7 @@ mod rest_reads;
 mod retention;
 mod run_collection;
 pub mod server;
+mod snapshots;
 pub mod upstream;
 
 pub use server::run;

@@ -116,3 +116,40 @@ pub struct GhReadResponse {
     #[prost(bool, tag = "6")]
     pub limit_reached: bool,
 }
+
+/// A first-class repository planning/authority snapshot; versioned route.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SnapshotRequest {
+    #[prost(message, optional, tag = "1")]
+    pub backend: Option<GhReadRequest>,
+    #[prost(string, tag = "2")]
+    pub owner: String,
+    #[prost(string, tag = "3")]
+    pub repo: String,
+    #[prost(uint32, tag = "4")]
+    pub limit: u32,
+    #[prost(bool, tag = "5")]
+    pub fresh: bool,
+    #[prost(bool, tag = "6")]
+    pub allow_stale: bool,
+    #[prost(uint32, tag = "7")]
+    pub version: u32,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SnapshotResponse {
+    #[prost(bytes = "vec", tag = "1")]
+    pub json: Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub source: String,
+    #[prost(uint64, optional, tag = "3")]
+    pub age_ms: Option<u64>,
+    #[prost(bool, tag = "4")]
+    pub stale: bool,
+    #[prost(bool, tag = "5")]
+    pub truncated: bool,
+    #[prost(int32, tag = "6")]
+    pub exit_code: i32,
+    #[prost(string, tag = "7")]
+    pub error: String,
+}

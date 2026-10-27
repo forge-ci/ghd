@@ -23,7 +23,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #10 | General REST cache and revalidation | Implemented and locally verified; draft PR #18 |
 | #11 | Bounded durable cache and restart invalidation | Implemented and locally verified; draft PR #18 |
 | #12 | Shared rate governor and cooldown | Implemented and locally verified; draft PR #18 |
-| #13 | Repository snapshots and authority freshness | Pending |
+| #13 | Repository snapshots and authority freshness | Implemented and locally verified; draft PR #18 |
 | #14 | Daemon/cache operations and configuration | Pending |
 | #15 | Diagnostics, dashboard and replay | Pending |
 | #16 | Agent plugin and managed gh distribution | Pending |
@@ -327,5 +327,24 @@ and a test assuming immediate success above the three-routine dispatch limit.
 The correction owns a short socket directory, waits for the renderer child,
 and preserves sixteen-way coalescing plus a three-key race against a two-entry
 cache. Local `./ci.py all` remains green with 144 Python tests and clean review.
-Expanded native verification of that correction is pending; the failed run is
-not reported as passed.
+The correction passed [run 40506918999](https://github.com/forge-ci/ghd/actions/runs/40506918999),
+including all four complete native integration lanes and CI OK. The earlier
+failed run remains part of the verification record.
+
+## Repository snapshots and authority freshness (#13)
+
+The shared CLI/Python implementation returns a schema-v1 repository envelope
+with explicit pagination, truncation and freshness. Sixteen ordinary concurrent
+callers share one origin request; explicit fresh calls dispatch independently
+and cannot return a retained body on failure. Stale planning requires opt-in
+and preserves age/source/reason. Bodies share bounded retention and mutation
+coherence but are not persisted to disk. Origin HTTP policy still applies.
+
+The focused pre-implementation failure is retained in the working verification
+record. `./ci.py test` passes all Rust suites and 163 Python cases, including
+19 installed snapshot cases for coalescing, authority failure, stale opt-in,
+empty repositories, pagination, partial errors, head mismatch, downstream age,
+storage policy, mutation invalidation and Python/CLI sharing. `./ci.py all`
+passes every gate, including wheel/backend smoke and action contracts. Read-only
+clud-review is clean. Contract precheck has zero violations and the same 17
+local-only review items. Hosted snapshot verification awaits this feature push.

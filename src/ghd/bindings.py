@@ -43,3 +43,38 @@ def gh_read(args: list[str]) -> ReadResult:
     """
     # PyO3 returns the tuple declared in _native.pyi; astroid cannot infer it.
     return ReadResult(*_native.gh_read(args))  # pylint: disable=not-an-iterable
+
+
+@dataclass(frozen=True)
+class SnapshotResult:
+    """Schema-v1 snapshot: 0 is accepted, 3 refuses unavailable freshness."""
+
+    stdout: bytes
+    exit_code: int
+    source: str
+    age_ms: int | None
+    stale: bool
+    truncated: bool
+    error: str
+
+    @property
+    def data(self) -> dict[str, Any] | None:
+        """Return the document, or None when freshness was refused."""
+        return json.loads(self.stdout) if self.stdout else None
+
+
+def snapshot(
+    repo: str, *, fresh: bool = False, allow_stale: bool = False, limit: int = 100
+) -> SnapshotResult:
+    """Read repository planning state; --fresh never accepts stale data.
+
+    Stale planning data is accepted only with allow_stale=True and remains
+    marked in both this result and its JSON document. Transport/configuration
+    errors raise OSError; freshness refusals have exit_code=3 and no body.
+    """
+    args = ["-R", repo, "--limit", str(limit)]
+    if fresh:
+        args.append("--fresh")
+    if allow_stale:
+        args.append("--allow-stale")
+    return SnapshotResult(*_native.snapshot(args))  # pylint: disable=not-an-iterable

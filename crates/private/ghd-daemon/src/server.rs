@@ -199,6 +199,7 @@ async fn route(state: &State, request: Request) -> Response {
                 ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
                 ("POST", "/v1/graphql") => graphql(state, request.body()).await,
                 ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
+                ("POST", "/v2/snapshot") => crate::snapshots::handle(state, request.body()).await,
                 _ => text(404, "no such route"),
             }
         })

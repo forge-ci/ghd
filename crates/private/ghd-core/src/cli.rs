@@ -13,6 +13,7 @@ usage:
   ghd gh <args...>                                forward to real gh safely
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
   ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
+  ghd snapshot -R owner/repo [--fresh|--allow-stale] repository planning snapshot
   ghd stats                                           what the daemon saved
   ghd daemon                                          run the daemon (auto-started)
   ghd --version | --help";
@@ -24,6 +25,12 @@ pub fn run(args: &[String]) -> io::Result<()> {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
+        ["snapshot", rest @ ..] => crate::snapshot::run(
+            &rest
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>(),
+        ),
         ["gh", rest @ ..] => crate::reads::run_or_passthrough(rest),
         ["pr", "view", rest @ ..] if native_pr_args(rest) => pr_view(rest),
         ["api", "graphql", rest @ ..] if native_graphql_args(rest) => crate::graphql::run(rest),
