@@ -97,6 +97,10 @@ pub fn exit_code(error: &io::Error) -> Option<i32> {
         .map(|exit| exit.0)
 }
 
+pub fn exit_error(code: i32) -> io::Error {
+    io::Error::other(CommandExit(code))
+}
+
 pub fn run(args: &[&str]) -> io::Result<()> {
     let mut command = command()?;
     command
@@ -127,9 +131,7 @@ pub fn run(args: &[&str]) -> io::Result<()> {
         }
         Ok(())
     } else {
-        Err(io::Error::other(CommandExit(
-            platform::process::exit_status_code(status),
-        )))
+        Err(exit_error(platform::process::exit_status_code(status)))
     }
 }
 

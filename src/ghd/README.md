@@ -74,3 +74,8 @@ on PATH.
 
 Both go through `ghd-core`, so they honor the same behavior and share
 the same daemon and cache.
+
+`bindings.gh_read(args)` returns a frozen `ReadResult` carrying output bytes,
+exit code, cache source and a conservative list-limit marker. It calls the
+same Rust reader as the CLI, and rejects write/interactive/unbound shapes.
+Nested PR fields are also available through the existing `pr_view` binding.

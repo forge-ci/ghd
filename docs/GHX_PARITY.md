@@ -19,7 +19,7 @@ The recurring review issue stays open as a maintenance responsibility.
 |---|---|---|
 | #7 | Host and credential isolation | Implemented and verified in 646f5db; draft PR #18 |
 | #8 | gh passthrough and mutation coherence | Implemented and verified; draft PR #18 |
-| #9 | Expanded resource and collection reads | Pending |
+| #9 | Expanded resource and collection reads | Implemented and verified; draft PR #18 |
 | #10 | General REST cache and revalidation | Pending |
 | #11 | Bounded durable cache and restart invalidation | Pending |
 | #12 | Shared rate governor and cooldown | Pending |
@@ -100,3 +100,88 @@ source. Only local ghd-platform build artifacts were moved to trash, then
 gate run also passed; no gate was relaxed to work around this observation.
 The journal's process-crash fence is implemented here; power-loss validation
 and durable cache custody remain part of #11 rather than being claimed done.
+
+## Resource and collection reads (#9)
+
+The installed-CLI regression `test_issue_superset_and_subset_share_one_cold_fetch`
+originally returned correct fixture JSON but failed because the two equivalent
+issue reads executed the upstream executable twice. Its temporary daemon is terminated and
+reaped by the fixture. This is the RED signal for the new resource cache.
+
+A controlled probe confirmed that real gh can render both `--jq` and templates
+from an authenticated loopback HTTP response using an absolute local endpoint
+and `--hostname 127.0.0.1`. Real credentials/configuration were replaced and
+external proxy access was blocked. The nonce can therefore stay in the child
+environment rather than a process-list-visible header argument. The reader now
+uses that renderer to preserve gh semantics without adopting a second jq.
+
+Current gh source and installed help were checked for run-list behavior.
+The default limit is 20. `workflowName` is resolved separately from a run's
+REST `name` field; do not copy the upstream fork's direct name-to-workflowName
+mapping. Conditional collection reuse must be limited to fields/dependencies
+whose freshness is actually covered, while preserving the native metadata
+lookup for other shapes. Large limits/pagination and attempts must remain
+explicit; no truncated collection will be presented as complete.
+
+## Read command matrix
+
+All rows below have a daemon cache implementation for the listed headless
+shapes. "Exact" means retaining real gh stdout/stderr/status under a full
+argument/context key, rather than projecting a canonical resource. This is
+cached execution, not an uncached passthrough or a claim that every gh flag is
+implemented. Unknown, interactive, web, streaming/watch, URL-based cross-host
+and unbound repository shapes keep real gh execution. The standing #17 review
+tracks future upstream shape/schema changes; generic REST is the separate #10.
+
+| Family | Cache behavior in #9 |
+|---|---|
+| PR view/list/checks | Canonical numeric JSON resources, nested fields and projections; checks exit 8/1; scalar direct views retain batching |
+| PR status/diff | Exact output with explicit repository |
+| Issue view/list | Canonical numeric JSON resources and projections |
+| Issue status | Exact output with explicit repository |
+| Run view/list | Canonical numeric JSON resources/attempts; collection ETags for collection-derived fields; native metadata for workflowName/jobs |
+| Repo view/list | Exact output; repository view selector is explicit |
+| Workflow list/view | Exact output, including view --yaml, explicit repository |
+| Release list/view | Exact output with explicit repository |
+| Search repos/issues/prs/commits/code | Exact output, argument/filter context retained |
+| Label list | Exact output with explicit repository |
+| Gist list/view | Exact output for identifiers; cross-host URL forms stay native |
+| Project list/view/field-list/item-list | Exact output, owner/filter arguments retained |
+| Cache list | Exact output with explicit repository |
+| Ruleset list/view/check | Exact output with explicit repository |
+| Org list | Exact output |
+| Secret list; variable list/get | Exact output with explicit repository or organization |
+| API GraphQL | Existing native query cache/write fence; generic REST follows #10 |
+
+Regression coverage includes a cold-call-count case for every exact-output
+row, shared projections and filtered list limits, attempts, nested/null data,
+unsupported field failures, real gh jq/template rendering and cleanup. A local
+mock GitHub transport compares the installed real gh with cached CLI and
+Python output for the main PR/issue/run JSON shapes, including pending checks.
+The real-gh transport comparison runs on Unix hosts with gh installed; the
+synthetic cache tests run on every declared platform. No live GitHub answers
+or performance claims are used as test evidence.
+
+The first implementation passes the issue-projection RED regression and the
+expanded synthetic resource tests. The real-gh comparison exposed nested
+review member-order changes; projection now uses kernal-api's bounded
+member-preserving parser. The collection tests retain the correct rows and reject an unsolicited 304.
+The installed real-gh socket fixture additionally exercises a real local
+200/ETag then 304 schedule, with no startup-transport substitution. That
+transport regression failed against the previous installed wheel and now
+passes. The subprocess-capacity regression proves that cancellation does not
+release a permit before the child is reaped. Review also tightened positional
+URL isolation and diagnostic/proxy contexts.
+
+Real gh 2.98 reports pending JSON checks with exit 0; its plain checks output
+returns 8. Tests compare both forms to the real binary and preserve their
+actual statuses. A synthetic JSON8 fixture additionally covers backend
+versions returning 8 for that shape. Mock responses include schema introspection
+and private per-test gh caches rather than relying on ambient HTTP receipts.
+Validation: the final `./ci.py all` reports ALL GATES PASSED, including all
+Rust suites, 111 installed Python tests, backend wheel smoke and action gates.
+The 48 resource tests cover every exact-output command family in the matrix,
+real-gh CLI/Python goldens, 101-row pagination, diagnostic bypass and retained
+ETag bodies. Read-only clud-review is clean after the reported corrections.
+Contract precheck reports zero violations; its 17 existing local-only
+needs-review checks remain visible. No gate was weakened or workflow added.

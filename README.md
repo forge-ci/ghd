@@ -97,11 +97,47 @@ ghd --version | --help
 **`ghd pr view`**
 - Same output as `gh pr view --json`. Without `-R`, the repository comes
   from the `origin` remote, as with `gh`.
-- Supported `--json` fields so far are the plain scalars: `additions`,
+- The direct batched GraphQL path supports the plain scalars: `additions`,
   `baseRefName`, `body`, `changedFiles`, `closed`, `closedAt`, `createdAt`,
   `deletions`, `headRefName`, `headRefOid`, `id`, `isDraft`,
   `mergeStateStatus`, `mergeable`, `mergedAt`, `number`, `state`, `title`,
   `updatedAt` and `url`.
+
+- Nested fields such as `reviews`, `author`, `labels` and `statusCheckRollup`
+  use the shared resource reader described below, also available to Python.
+
+**Resource and collection reads**
+
+`ghd issue view 42 -R owner/repo --json number,title` and `ghd issue list
+-R owner/repo --json number,title --limit 10` cache canonical JSON in the
+daemon. PR list/checks and run view/list use the same reader. Field order,
+subsets, supersets, `--jq` and templates share data; filter values, run attempts,
+hosts and credential identities stay separate. Missing fields trigger a union
+fetch. Pending checks preserve gh exit 8; failed checks preserve exit 1.
+
+Lists share up to 100 rows across requested limits. Larger limits retain gh's
+native pagination and cache exact output. A reached limit never establishes
+that the collection is complete. Run collections use conditional REST GETs
+when the selected fields come from that collection; a 304 reuses the retained
+body. `workflowName` and jobs require native gh metadata reads. JSON nulls and
+nested data preserve gh's output, including nested member order.
+
+Diagnostic (`GH_DEBUG`/`DEBUG`) and forced-terminal reads execute directly;
+credential-bearing API traces are never cached. Exit status follows real gh:
+for example, gh 2.98's JSON checks exporter returns 0 for pending checks,
+while its plain output returns 8. ghd retains each result's actual status.
+
+Headless cached reads require an explicit repository (`-R`, a repository view
+selector, or `GH_REPO`). Unbound, interactive, watch and unsupported shapes
+retain real gh behavior. The existing scalar `pr view` path still resolves
+`origin` and batches GraphQL. Other recognized safe families cache exact gh
+output; see the [command matrix](docs/GHX_PARITY.md#read-command-matrix).
+
+Python has the same behavior through `ghd.bindings.gh_read(args)`, returning
+stdout/stderr bytes, exit code, source and `limit_reached`. The existing
+`pr_view()` binding accepts nested fields too. jq and templates use real gh's
+renderer on a private authenticated loopback body, with separate credentials
+and no external proxy access.
 
 **`ghd api graphql`**
 - Takes gh's `-f` (string) and `-F` (typed, `@file`) fields and prints
@@ -123,16 +159,16 @@ start lock means concurrent cold clients start exactly one daemon.
 ## Forwarding commands and writes
 
 `ghd gh <args...>` forwards arguments and the original stdin/stdout/stderr to
-real GitHub CLI. Unimplemented top-level commands also pass through. Native
-commands use this route for unsupported rendering flags such as `--jq` and
-`--template`; a request already dispatched to a daemon is never replayed as a
-fallback. `GHD_GH_PATH` selects a real `gh` executable explicitly. Recursive
+real GitHub CLI when the shape is not eligible for a cached read. Eligible
+headless reads go through the daemon's shared reader. Unknown top-level
+commands also pass through. A request already dispatched to a daemon is never
+replayed as a fallback. `GHD_GH_PATH` selects a real `gh` executable explicitly. Recursive
 shims are rejected.
 
 Known safe reads pass through without a write fence. Mutations and unknown
 commands record an intent in the shared write journal before dispatch. Every
 daemon checks the journal before and after cached reads. A completed write
-advances the generation and invalidates both PR and raw GraphQL caches,
+advances the generation and invalidates PR, raw GraphQL and resource-read caches,
 including results still in flight. This also works when a daemon was stopped
 while a subprocess performed the write.
 

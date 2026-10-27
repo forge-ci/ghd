@@ -64,3 +64,9 @@ cache maps. Old in-flight responses cannot publish a pre-write answer as
 current. The controlled loopback schedules in `coherence_tests.rs` cover
 fragment-leading mutations, both cache tiers, an overlapping old read and an
 uncertain upstream write whose fence survives journal reopening.
+
+`gh_reads.rs` owns canonical resource and exact-output caches with per-key
+singleflight and shared epoch validation. `gh_executor.rs` runs bounded,
+identity-pinned gh children; `gh_render.rs` delegates jq/templates over private
+loopback HTTP. `run_collection.rs` retains Actions collection validators with
+the corresponding bodies and maps only fields covered by that validator.

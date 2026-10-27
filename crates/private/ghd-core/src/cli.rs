@@ -24,25 +24,30 @@ pub fn run(args: &[String]) -> io::Result<()> {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
-        ["gh", rest @ ..] => crate::compat::run(rest),
+        ["gh", rest @ ..] => crate::reads::run_or_passthrough(rest),
         ["pr", "view", rest @ ..] if native_pr_args(rest) => pr_view(rest),
         ["api", "graphql", rest @ ..] if native_graphql_args(rest) => crate::graphql::run(rest),
-        _ => crate::compat::run(&args),
+        _ => crate::reads::run_or_passthrough(&args),
     }
 }
 
 fn native_pr_args(args: &[&str]) -> bool {
     let mut it = args.iter();
+    let mut json = false;
     while let Some(arg) = it.next() {
         match *arg {
-            "-R" | "--repo" | "--json" | "--hostname" => {
+            "--json" => {
+                json = true;
+                it.next();
+            }
+            "-R" | "--repo" | "--hostname" => {
                 it.next();
             }
             value if !value.starts_with('-') => {}
             _ => return false,
         }
     }
-    true
+    json
 }
 
 fn native_graphql_args(args: &[&str]) -> bool {
@@ -152,6 +157,44 @@ fn pr_view(args: &[&str]) -> io::Result<()> {
 
 /// One `pr view` round trip; the Python binding calls this directly.
 pub fn pr_view_request(request: &PrViewRequest) -> io::Result<PrViewResponse> {
+    if request.fields.is_empty() {
+        return Err(invalid("at least one JSON field is required"));
+    }
+    if request
+        .fields
+        .iter()
+        .any(|field| !crate::fields::PR_FIELDS.contains(&field.as_str()))
+    {
+        let repo = if request.hostname.is_empty() {
+            format!("{}/{}", request.owner, request.repo)
+        } else {
+            format!("{}/{}/{}", request.hostname, request.owner, request.repo)
+        };
+        let args = vec![
+            "pr".into(),
+            "view".into(),
+            request.number.to_string(),
+            "--repo".into(),
+            repo,
+            "--json".into(),
+            request.fields.join(","),
+        ];
+        let response = crate::reads::read(&args)?;
+        if response.exit_code != 0 {
+            return Err(io::Error::other(
+                String::from_utf8_lossy(&response.stderr).into_owned(),
+            ));
+        }
+        let mut json = response.stdout;
+        if json.last() == Some(&b'\n') {
+            json.pop();
+        }
+        return Ok(PrViewResponse {
+            json,
+            source: response.source,
+            error: String::new(),
+        });
+    }
     let (status, body) = client::call_host(
         (!request.hostname.is_empty()).then_some(request.hostname.as_str()),
         "POST",

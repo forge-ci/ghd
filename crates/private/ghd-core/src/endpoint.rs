@@ -36,9 +36,10 @@ pub fn read() -> io::Result<Endpoint> {
 }
 
 pub fn read_for(identity: &Identity) -> io::Result<Endpoint> {
-    parse(&std::fs::read_to_string(
-        directory(identity)?.join("endpoint"),
-    )?)
+    let bytes = platform::fs::read_private_file(&directory(identity)?.join("endpoint"), 4096)?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    parse(text)
 }
 
 pub fn write(endpoint: &Endpoint) -> io::Result<()> {

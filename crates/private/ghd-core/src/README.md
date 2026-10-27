@@ -74,3 +74,9 @@ lookup, argument/stream forwarding and conservative command classification.
 A pre-dispatch intent remains unresolved on uncertain/failed execution; its
 presence prevents a restart from restoring stale cache authority. A connected
 client request is never replayed automatically after its reply is lost.
+
+Resource reads use `resource.rs` for target binding, field/filter/limit
+normalization and nested-order-preserving projections. `reads.rs` supplies
+the shared CLI/Python protobuf request, explicit backend/context and read-only
+API. The compatibility executor remains the owner of unsupported/interactive
+forms; writes still enter the journal before real gh dispatch.

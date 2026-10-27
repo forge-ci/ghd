@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn state_base() -> io::Result<PathBuf> {
@@ -15,8 +15,9 @@ pub(crate) fn state_base() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+    // Delegate ownership/DACL enforcement to the existing native facade.
+    // In particular a GHD_STATE_DIR override need not inherit profile ACLs.
+    kernal_api::platform::fs::create_dir_all_private(dir)
 }
 
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {

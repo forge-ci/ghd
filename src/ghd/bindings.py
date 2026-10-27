@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from ghd import _native
@@ -20,3 +21,25 @@ def pr_view(repo: str, number: int, fields: list[str]) -> dict[str, Any]:
     """
     owner, name = repo.rsplit("/", 1)
     return json.loads(_native.pr_view(owner, name, number, fields))
+
+
+@dataclass(frozen=True)
+class ReadResult:
+    """Native read result; reaching a list limit does not prove completeness."""
+
+    stdout: bytes
+    stderr: bytes
+    exit_code: int
+    source: str
+    limit_reached: bool
+
+
+def gh_read(args: list[str]) -> ReadResult:
+    """Run a safe, explicitly bound read using the same cache as the CLI.
+
+    The result preserves pending-checks exit 8 and raw output bytes. Transport
+    and identity failures raise OSError. Writes and interactive forms belong
+    to the CLI compatibility route and are rejected by this read-only API.
+    """
+    # PyO3 returns the tuple declared in _native.pyi; astroid cannot infer it.
+    return ReadResult(*_native.gh_read(args))  # pylint: disable=not-an-iterable

@@ -17,7 +17,8 @@
 //! what it does.
 
 pub use ghd_core::{
-    cli, client, coherence, compat, endpoint, fields, identity, operation, proto, version_banner,
+    cli, client, coherence, compat, endpoint, fields, identity, operation, proto, reads, resource,
+    version_banner,
 };
 
 #[cfg(feature = "daemon")]

@@ -54,10 +54,10 @@ type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
 /// Past this many cached queries, stale ones are dropped on insert.
 const GRAPHQL_CACHE_MAX: usize = 4096;
 
-struct State {
+pub(crate) struct State {
     token: String,
     identity_key: String,
-    host: String,
+    pub(crate) host: String,
     upstream: Arc<Upstream>,
     cache: Mutex<HashMap<(String, String, u64), Slot>>,
     graphql: Mutex<HashMap<Vec<u8>, GraphqlSlot>>,
@@ -65,12 +65,19 @@ struct State {
     reads: AtomicU64,
     fresh: AtomicU64,
     started: Instant,
-    fresh_for: Duration,
-    journal: ghd_core::coherence::Journal,
+    pub(crate) fresh_for: Duration,
+    pub(crate) journal: ghd_core::coherence::Journal,
     cache_epoch: Mutex<u64>,
+    pub(crate) github_token: String,
+    pub(crate) gh_reads: crate::gh_reads::Cache,
+    pub(crate) gh_permits: kernal_api::async_engine::Semaphore,
+    pub(crate) render_root: std::path::PathBuf,
 }
 
-fn new_state(identity: &ghd_core::identity::Identity, token: String) -> io::Result<State> {
+pub(crate) fn new_state(
+    identity: &ghd_core::identity::Identity,
+    token: String,
+) -> io::Result<State> {
     Ok(State {
         token,
         identity_key: identity.key().to_string(),
@@ -85,6 +92,10 @@ fn new_state(identity: &ghd_core::identity::Identity, token: String) -> io::Resu
         fresh_for: fresh_for(),
         journal: ghd_core::coherence::Journal::global()?,
         cache_epoch: Mutex::new(0),
+        github_token: identity.token().to_string(),
+        gh_reads: Mutex::new(HashMap::new()),
+        gh_permits: kernal_api::async_engine::Semaphore::new(4),
+        render_root: endpoint::directory(identity)?.join("renders"),
     })
 }
 
@@ -99,12 +110,13 @@ async fn sync_epoch(state: &State, epoch: u64) -> io::Result<()> {
     if *current != epoch {
         state.cache.lock().await.clear();
         state.graphql.lock().await.clear();
+        state.gh_reads.lock().await.clear();
         *current = epoch;
     }
     Ok(())
 }
 
-async fn read_epoch(state: &State) -> io::Result<u64> {
+pub(crate) async fn read_epoch(state: &State) -> io::Result<u64> {
     let epoch = state.journal.epoch()?;
     sync_epoch(state, epoch).await?;
     Ok(epoch)
@@ -133,7 +145,7 @@ pub fn run() -> io::Result<()> {
     })
 }
 
-async fn new_token() -> io::Result<String> {
+pub(crate) async fn new_token() -> io::Result<String> {
     let random = SecureRandom::new(1, Duration::from_secs(10))
         .map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = random
@@ -158,6 +170,7 @@ async fn route(state: &State, request: Request) -> Response {
         ("GET", "/v1/stats") => stats(state),
         ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
         ("POST", "/v1/graphql") => graphql(state, request.body()).await,
+        ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
         _ => text(404, "no such route"),
     }
 }
@@ -206,6 +219,9 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
             );
         }
         wanted.insert(field.clone());
+    }
+    if wanted.is_empty() {
+        return failure(400, "at least one JSON field is required".into());
     }
     let epoch = match read_epoch(state).await {
         Ok(epoch) => epoch,
@@ -367,6 +383,7 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
         };
         state.cache.lock().await.clear();
         state.graphql.lock().await.clear();
+        state.gh_reads.lock().await.clear();
         return match state.upstream.graphql_raw(&upstream_body).await {
             Ok((status, json)) => {
                 if status < 500

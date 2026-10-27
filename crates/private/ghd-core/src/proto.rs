@@ -70,3 +70,49 @@ pub struct GraphqlResponse {
     #[prost(string, tag = "3")]
     pub error: String,
 }
+
+/// `POST /v1/read/gh`: a classified headless read through a real-gh backend.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GhReadRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub args: Vec<String>,
+    #[prost(string, tag = "2")]
+    pub cwd: String,
+    #[prost(string, tag = "3")]
+    pub program: String,
+    #[prost(string, tag = "4")]
+    pub program_stamp: String,
+    #[prost(string, tag = "5")]
+    pub default_repo: String,
+    #[prost(string, tag = "6")]
+    pub worktree_stamp: String,
+    #[prost(message, repeated, tag = "7")]
+    pub environment: Vec<EnvironmentVariable>,
+    #[prost(string, tag = "8")]
+    pub hostname: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct EnvironmentVariable {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    #[prost(string, tag = "2")]
+    pub value: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GhReadResponse {
+    #[prost(bytes = "vec", tag = "1")]
+    pub stdout: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub stderr: Vec<u8>,
+    #[prost(int32, tag = "3")]
+    pub exit_code: i32,
+    #[prost(string, tag = "4")]
+    pub source: String,
+    #[prost(string, tag = "5")]
+    pub error: String,
+    /// Reaching a caller's limit is not proof of collection completeness.
+    #[prost(bool, tag = "6")]
+    pub limit_reached: bool,
+}

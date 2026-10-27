@@ -7,7 +7,7 @@
 use crate::platform;
 use prost::Message;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read};
+use std::io;
 use std::path::PathBuf;
 
 const VERSION: u32 = 1;
@@ -48,13 +48,8 @@ impl Journal {
     }
 
     fn record(&self) -> io::Result<Record> {
-        let mut bytes = Vec::new();
-        File::open(self.directory.join("journal"))?
-            .take(MAX_RECORD + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_RECORD {
-            return Err(invalid("oversized write journal"));
-        }
+        let bytes =
+            platform::fs::read_private_file(&self.directory.join("journal"), MAX_RECORD as usize)?;
         let record =
             Record::decode(bytes.as_slice()).map_err(|_| invalid("corrupt write journal"))?;
         if record.version != VERSION || record.active.len() > MAX_WRITERS {

@@ -91,3 +91,19 @@ references removed concepts is worse than no procedure.
   by a string prefix. Malformed and ambiguous operations fail at the boundary.
 - Add GHD_GH_PATH and an absolute GHD_STATE_DIR override for explicit executable
   selection, private state isolation and deterministic tests.
+
+## ghx parity: resource and collection reads (#9)
+
+- Share PR/issue/run JSON across fields, projections and bounded list limits;
+  isolate filters, run attempts, hosts and credentials. Nested reviews/checks
+  and pending-checks exit 8 retain gh behavior.
+- Retain collection bodies and ETags together for conditional Actions refresh.
+  Rich workflow metadata and limits above 100 retain native gh fetching and
+  pagination. A reached list limit is reported without claiming completeness.
+- Cache exact output for other recognized headless read families. Unsupported
+  and interactive forms keep the compatibility route; run watch is uncached.
+- Expose the same reader as Python `gh_read`, with raw bytes and exit status;
+  preserve nested JSON member order and delegate jq/templates to real gh on
+  authenticated local HTTP with isolated renderer credentials/configuration.
+- Enforce private directory custody through the existing kernal-api facade on
+  all platforms; bound and validate endpoint/journal files before decoding.

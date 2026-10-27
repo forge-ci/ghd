@@ -192,3 +192,42 @@ part of both the upstream envelope and the exact query cache key. The daemon
 rejects invalid/ambiguous documents and subscriptions before execution.
 Client reconnection is restricted to pre-dispatch situations; once connected,
 a lost reply is an error rather than a second potentially mutating request.
+
+## Shared resource reads
+
+The core `resource` parser binds explicitly scoped read targets and normalizes
+JSON projection, filters and bounded limits. `reads` sends the caller's real-gh
+program stamp, output context and worktree-dependent context over protobuf to
+`/v1/read/gh`. The daemon verifies host/identity, program and argument bounds.
+CLI and Python use this one path; existing scalar PR GraphQL batching stays
+intact. Unknown fields retain exact gh error output rather than guessed data.
+
+The resource cache has a lock per normalized request. Canonical PR/issue/run
+JSON retains a union of fetched fields; projections preserve nested member
+order and nulls. Each list can share 100 rows across smaller requested limits.
+Larger limits use native gh pagination and an exact-output key. The Actions
+collection adapter maps only fields available in the REST collection, keeping
+its ETag with the body. Conditional requests execute `gh api --include` using
+the same caller-bound configuration, proxies and CA context as other resource
+reads; they never borrow the startup HTTP client's transport. A 304 without a
+retained validated body is an error.
+`workflowName` and jobs retain native metadata fetching, since the collection
+validator cannot establish those separate dependencies' freshness.
+
+Other allowlisted read families retain exact stdout/stderr/status. Real-gh
+subprocesses have bounded output, a deadline, four shared permits, explicit
+caller context and identity-pinned credentials. This includes uppercase and
+lowercase proxy variables, PATH and cache/configuration directories. Debug or
+forced-terminal requests bypass cached CLI execution and are rejected by the
+read-only binding. They start with a cleared
+environment rather than inheriting the first daemon caller's output context.
+Every cache read checks the shared write epoch before and after publication;
+mutations invalidate PR, raw GraphQL and resource maps together.
+
+The renderer serves the projected body on authenticated loopback HTTP and
+executes real gh's jq/template engine against that endpoint. Its random
+credential stays in the child environment, its configuration directory is
+private, external proxies fail closed and only the local GET route is served.
+The directory owner remains alive until the bounded child is reaped and then
+cleans it. Render failures retain native stderr/status and do not overwrite
+the canonical cached JSON. This feature adds no hosted workflow.

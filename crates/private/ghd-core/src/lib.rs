@@ -24,6 +24,8 @@ pub mod graphql;
 pub mod identity;
 pub mod operation;
 pub mod proto;
+pub mod reads;
+pub mod resource;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.
 pub fn version_banner() -> String {

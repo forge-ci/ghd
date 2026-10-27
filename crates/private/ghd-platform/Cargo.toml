@@ -15,3 +15,6 @@ publish = false
 [lib]
 name = "ghd_platform"
 doctest = false
+
+[dependencies]
+kernal-api = { workspace = true, features = ["fs"] }

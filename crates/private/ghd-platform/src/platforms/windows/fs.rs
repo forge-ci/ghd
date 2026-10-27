@@ -1,5 +1,5 @@
 //! Windows state directory (`%LOCALAPPDATA%`). Files there inherit the
-//! user profile's owner-only ACL, so no extra DACL work is done here.
+//! profile by default; explicit owner/SYSTEM DACLs protect custom roots too.
 
 use std::fs;
 use std::io::{self, Write};
@@ -13,7 +13,9 @@ pub(crate) fn state_base() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir)
+    // Delegate ownership/DACL enforcement to the existing native facade.
+    // In particular a GHD_STATE_DIR override need not inherit profile ACLs.
+    kernal_api::platform::fs::create_dir_all_private(dir)
 }
 
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {

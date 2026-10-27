@@ -7,6 +7,7 @@
 
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 #[pyfunction]
 fn version_banner() -> String {
@@ -44,9 +45,28 @@ fn pr_view(
     Ok(String::from_utf8_lossy(&reply.json).into_owned())
 }
 
+type ReadTuple = (Py<PyBytes>, Py<PyBytes>, i32, String, bool);
+
+/// Return stdout/stderr/status without guessing whether a nonzero read (for
+/// example pending checks, exit 8) is an exceptional transport failure.
+#[pyfunction]
+fn gh_read(py: Python<'_>, args: Vec<String>) -> PyResult<ReadTuple> {
+    let response = py
+        .detach(|| ghd::reads::read(&args))
+        .map_err(|error| PyOSError::new_err(error.to_string()))?;
+    Ok((
+        PyBytes::new(py, &response.stdout).unbind(),
+        PyBytes::new(py, &response.stderr).unbind(),
+        response.exit_code,
+        response.source,
+        response.limit_reached,
+    ))
+}
+
 #[pymodule]
 fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(version_banner, module)?)?;
     module.add_function(wrap_pyfunction!(pr_view, module)?)?;
+    module.add_function(wrap_pyfunction!(gh_read, module)?)?;
     Ok(())
 }

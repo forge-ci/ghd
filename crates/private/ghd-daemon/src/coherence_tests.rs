@@ -148,6 +148,12 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
             .lock()
             .await
             .insert(("o".into(), "r".into(), 1), Arc::new(Mutex::new(None)));
+        harness
+            .state
+            .gh_reads
+            .lock()
+            .await
+            .insert("resource".into(), Arc::new(Mutex::new(None)));
         let port = harness.port;
         let key = harness.key.clone();
         let pending = async_engine::launch(async move { request(port, &key, "{ version }").await });
@@ -167,6 +173,7 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
             "PR cache invalidated too"
         );
         assert!(harness.state.graphql.lock().await.is_empty());
+        assert!(harness.state.gh_reads.lock().await.is_empty());
         harness.release.notify_one();
         let (status, stale) = pending.await.expect("pending reader");
         assert_eq!(status, 409);
