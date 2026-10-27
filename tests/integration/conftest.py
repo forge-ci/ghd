@@ -15,6 +15,7 @@ import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -28,7 +29,7 @@ import pytest
 from ghd.platforms import cli_binary_name, is_windows
 
 FAKE_GH = r"""
-import json, os, sys, urllib.request
+import json, os, subprocess, sys, urllib.request
 from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 args = sys.argv[1:]
@@ -69,7 +70,10 @@ if args[:2] == ["api", "fixture/body"] or collection:
     raise SystemExit(0)
 if args and args[0] == "api":
     if REAL_GH is not None:
-        os.execv(REAL_GH, [REAL_GH, *args])
+        # Keep the supervised wrapper alive until its renderer exits. Windows
+        # execv spawns/replaces differently from a Unix exec and can let the
+        # wrapper's lifetime end before output is collected.
+        raise SystemExit(subprocess.run([REAL_GH, *args], check=False).returncode)
     endpoint = args[1]
     if not endpoint.startswith("http://127.0.0.1:"):
         raise SystemExit("fixture renderer refuses non-loopback requests")
@@ -311,7 +315,6 @@ def _mock_github(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
     """The real gh transport goes only to this private local API fixture."""
     if is_windows() or shutil.which("gh") is None:
         pytest.skip("real gh local Unix transport")
-    socket = tmp_path / "api.sock"
     trace = tmp_path / "api-calls.jsonl"
     context = {
         "__typename": "CheckRun",
@@ -384,14 +387,18 @@ def _mock_github(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
 
     # Unix transport is an official gh test/development option. This fixture's
     # tests select Unix hosts through ghd's existing platform facade.
-    with socketserver.UnixStreamServer(str(socket), handler) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield socket, trace
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
+    # The pytest case directory can exceed macOS's sockaddr_un path limit.
+    # A separately owned short temporary directory keeps the transport real.
+    with tempfile.TemporaryDirectory(prefix="ga-") as socket_dir:
+        socket = Path(socket_dir) / "a"
+        with socketserver.UnixStreamServer(str(socket), handler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield socket, trace
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
 
 
 def mock_handler(

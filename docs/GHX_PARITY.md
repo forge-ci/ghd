@@ -318,3 +318,14 @@ tests, backend wheel smoke and action gates. The focused reserve-floor RED is
 retained. Read-only clud-review is clean after fixing its record-domain finding;
 a valid cache envelope cannot decode as default governor policy. Contract
 precheck reports zero violations and the same 17 local-only review items.
+
+The first expanded #12 native run,
+[40501114131](https://github.com/forge-ci/ghd/actions/runs/40501114131),
+passed Rust/fast checks but exposed Python fixture failures: long macOS Unix
+socket names, a Windows renderer wrapper ending before its delegated output,
+and a test assuming immediate success above the three-routine dispatch limit.
+The correction owns a short socket directory, waits for the renderer child,
+and preserves sixteen-way coalescing plus a three-key race against a two-entry
+cache. Local `./ci.py all` remains green with 144 Python tests and clean review.
+Expanded native verification of that correction is pending; the failed run is
+not reported as passed.

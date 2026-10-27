@@ -107,10 +107,17 @@ def test_concurrent_reads_and_evictions_bound_slot_bookkeeping(
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         responses = list(pool.map(read, [42] * 16))
-        assert all(response.returncode == 0 for response in responses)
+        assert all(response.returncode == 0 for response in responses), [
+            response.stderr for response in responses if response.returncode
+        ]
         assert cold_count(trace) == 1, "identical admitted requests still coalesce"
+    # Three distinct concurrent keys still race a two-entry index, without
+    # exceeding the governor's advertised three routine dispatch slots.
+    with ThreadPoolExecutor(max_workers=3) as pool:
         responses = list(pool.map(read, range(43, 75)))
-        assert all(response.returncode == 0 for response in responses)
+        assert all(response.returncode == 0 for response in responses), [
+            response.stderr for response in responses if response.returncode
+        ]
     stats = invoke("stats", native=True)
     assert stats.returncode == 0, stats.stderr
     assert json.loads(stats.stdout)["cache_entries"] <= 2
