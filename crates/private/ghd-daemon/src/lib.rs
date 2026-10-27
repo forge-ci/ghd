@@ -8,8 +8,25 @@
 //! Built on kernal-api only: its async engine, HTTP client/server, JSON and
 //! secure random. No crate here names tokio, reqwest or hyper.
 
+pub(crate) use ghd_platform as platform;
+
+mod gh_executor;
+mod gh_reads;
+mod gh_render;
+mod governance;
 pub mod graphql;
+mod persistence;
+mod rest_reads;
+mod retention;
+mod run_collection;
 pub mod server;
+mod snapshots;
 pub mod upstream;
 
 pub use server::run;
+
+mod policy;
+
+mod operations;
+
+mod ledger;

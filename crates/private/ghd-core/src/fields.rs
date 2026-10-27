@@ -28,6 +28,7 @@ pub const PR_FIELDS: &[&str] = &[
 /// An owner or repository name safe to splice into a GraphQL string literal.
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
+        && !matches!(name, "." | "..")
         && name.len() <= 100
         && name
             .bytes()

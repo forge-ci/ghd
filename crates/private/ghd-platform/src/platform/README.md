@@ -56,3 +56,10 @@ Covered by `ghd-platform:lib`:
 ```bash
 soldr cargo test -p ghd-platform --locked
 ```
+
+## Explicit state and command status
+
+`fs::state_dir()` honors an absolute `GHD_STATE_DIR` override and rejects a
+relative value. `process::exit_status_code` preserves real-gh status through
+its native implementation. Unix signal termination uses 128+signal;
+Windows retains the full process status rather than narrowing it to a byte.

@@ -14,12 +14,25 @@
 
 pub(crate) use ghd_platform as platform;
 
+pub mod cache_policy;
 pub mod cli;
 pub mod client;
+pub mod coherence;
+pub mod compat;
+pub mod durable;
 pub mod endpoint;
 pub mod fields;
+pub mod governor;
+pub mod governor_ledger;
 pub mod graphql;
+pub mod identity;
+pub mod operation;
 pub mod proto;
+pub mod reads;
+pub mod resource;
+pub mod rest;
+pub mod retention;
+pub mod snapshot;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.
 pub fn version_banner() -> String {
@@ -50,3 +63,13 @@ mod tests {
         );
     }
 }
+
+pub mod request_policy;
+
+pub mod operations;
+
+pub mod config;
+
+pub mod diagnostics;
+
+pub mod managed;

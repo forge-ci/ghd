@@ -55,3 +55,22 @@ sentinels and one query.
 ```bash
 soldr cargo test -p ghd-daemon --locked
 ```
+
+## Write and read overlap
+
+Each read synchronizes its memory cache generation against the shared journal
+and confirms that generation before returning. Mutations invalidate both
+cache maps. Old in-flight responses cannot publish a pre-write answer as
+current. The controlled loopback schedules in `coherence_tests.rs` cover
+fragment-leading mutations, both cache tiers, an overlapping old read and an
+uncertain upstream write whose fence survives journal reopening.
+
+`gh_reads.rs` owns canonical resource and exact-output caches with per-key
+singleflight and shared epoch validation. `gh_executor.rs` runs bounded,
+identity-pinned gh children; `gh_render.rs` delegates jq/templates over private
+loopback HTTP. `run_collection.rs` retains Actions collection validators with
+the corresponding bodies and maps only fields covered by that validator.
+
+`rest_reads.rs` retains API bodies with validators, private identity scope and
+write epochs. Its cache policy honors no-store, no-cache, max-age and wildcard
+Vary. HTTP operation counters are separate from observed provider quota totals.

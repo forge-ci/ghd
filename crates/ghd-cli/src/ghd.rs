@@ -9,12 +9,15 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("daemon") => ghd::run_daemon(),
+        Some("daemon") if args.len() == 1 => ghd::run_daemon(),
         _ => ghd::cli::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            if let Some(code) = ghd::compat::exit_code(&e) {
+                std::process::exit(code);
+            }
             eprintln!("ghd: {e}");
             ExitCode::FAILURE
         }

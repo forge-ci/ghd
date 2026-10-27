@@ -1,0 +1,7 @@
+{
+  "name": "ghd",
+  "version": "0.1.0",
+  "description": "Explicit verified-tool bootstrap and scoped GitHub read caching for agents",
+  "repository": "https://github.com/forge-ci/ghd",
+  "license": "MIT"
+}

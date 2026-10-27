@@ -19,6 +19,8 @@ repository = "https://github.com/forge-ci/ghd"
 homepage = "https://github.com/forge-ci/ghd"
 
 [workspace.dependencies]
+httpdate = "=1.0.3"
+graphql-parser = { version = "=0.4.1", default-features = false }
 anyhow = "1"
 # Exact pins (obs-rust #2056 convention): behaviour cannot drift under a
 # lockfile refresh. kernal-api is the only async/HTTP/JSON facade; no crate
@@ -85,6 +87,7 @@ libraries = [{ path = "dylints/platform_boundary" }]
 
 # Bridge until kernal-api 0.1.32 (first release with `http-client-rustls`) is
 # on crates.io: remove this table once it is published. Pinned to an exact
-# kernal-api main commit.
+# kernal-api correction: Windows identity reads need no executable write access.
+# Coordinated dependency fix: forge-ci/kernal-api PR linked from PR #18.
 [patch.crates-io]
-kernal-api = { git = "https://github.com/forge-ci/kernal-api", rev = "79b60ffa1f85b834c7096b679929c54862313a15" }
+kernal-api = { git = "https://github.com/forge-ci/kernal-api", rev = "63b0da695e0887cd9ee025e81b89caee566b7d72" }

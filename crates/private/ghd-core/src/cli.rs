@@ -10,23 +10,99 @@ pub const USAGE: &str = "\
 ghd: a cached, batched, budget-aware gateway for gh reads
 
 usage:
+  ghd gh <args...>                                forward to real gh safely
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
-  ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
-  ghd stats                                           what the daemon saved
-  ghd daemon                                          run the daemon (auto-started)
+  ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
+  ghd snapshot -R owner/repo [--fresh|--allow-stale] repository planning snapshot
+  ghd stats | ledger | dashboard                       private diagnostics
+  ghd replay FILE --ttl MS                             offline exact-key model
+  ghd tools publish|status|uninstall ...               verified tool maintenance
+  ghd daemon [start|stop|restart|status]                foreground or lifecycle
+  ghd cache stats|keys|flush                           inspect or invalidate
+  ghd [--no-cache] [--ttl MS] gh <read args...>         per-request cache control
   ghd --version | --help";
 
 /// Run every subcommand except `daemon`, which needs `ghd-daemon`.
 pub fn run(args: &[String]) -> io::Result<()> {
+    let mut policy = crate::request_policy::Policy::default();
+    let mut start = 0;
+    while let Some(arg) = args.get(start) {
+        match arg.as_str() {
+            "--no-cache" if !policy.bypass => policy.bypass = true,
+            "--ttl" if policy.ttl_ms.is_none() => {
+                start += 1;
+                policy.ttl_ms = Some(
+                    args.get(start)
+                        .ok_or_else(|| invalid("--ttl needs milliseconds"))?
+                        .parse()
+                        .map_err(|_| invalid("--ttl needs nonnegative milliseconds"))?,
+                );
+            }
+            _ => break,
+        }
+        start += 1;
+    }
+    crate::request_policy::scope(policy, || run_inner(&args[start..]))
+}
+fn run_inner(args: &[String]) -> io::Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
-        ["pr", "view", rest @ ..] => pr_view(rest),
-        ["api", "graphql", rest @ ..] => crate::graphql::run(rest),
-        _ => Err(invalid(USAGE)),
+        ["tools", rest @ ..] => crate::managed::run(rest),
+        ["ledger" | "dashboard"] => crate::operations::run(&args),
+        ["replay", rest @ ..] => crate::diagnostics::run(rest),
+        ["daemon", rest @ ..] if !rest.is_empty() => crate::operations::run(rest),
+        ["cache", rest @ ..] => {
+            let mut words = vec!["cache"];
+            words.extend(rest);
+            crate::operations::run(&words)
+        }
+        ["snapshot", rest @ ..] => crate::snapshot::run(
+            &rest
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>(),
+        ),
+        ["gh", rest @ ..] => crate::reads::run_or_passthrough(rest),
+        ["pr", "view", rest @ ..] if native_pr_args(rest) => pr_view(rest),
+        ["api", "graphql", rest @ ..] if native_graphql_args(rest) => crate::graphql::run(rest),
+        _ => crate::reads::run_or_passthrough(&args),
     }
+}
+
+fn native_pr_args(args: &[&str]) -> bool {
+    let mut it = args.iter();
+    let mut json = false;
+    while let Some(arg) = it.next() {
+        match *arg {
+            "--json" => {
+                json = true;
+                it.next();
+            }
+            "-R" | "--repo" | "--hostname" => {
+                it.next();
+            }
+            value if !value.starts_with('-') => {}
+            _ => return false,
+        }
+    }
+    json
+}
+
+fn native_graphql_args(args: &[&str]) -> bool {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match *arg {
+            "-f" | "--raw-field" | "-F" | "--field" | "--hostname" => {
+                it.next();
+            }
+            value if (value.starts_with("-f") || value.starts_with("-F")) && value.len() > 2 => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -53,10 +129,24 @@ pub fn parse_pr_view(
     let mut number = None;
     let mut repo = None;
     let mut fields = None;
+    let mut host = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match *arg {
-            "-R" | "--repo" => repo = it.next().map(|s| s.to_string()),
+            "-R" | "--repo" => {
+                let value = it.next().ok_or_else(|| invalid("--repo needs a value"))?;
+                if repo.replace(value.to_string()).is_some() {
+                    return Err(invalid("repeated repository selector"));
+                }
+            }
+            "--hostname" => {
+                let value = it
+                    .next()
+                    .ok_or_else(|| invalid("--hostname needs a value"))?;
+                if host.replace(crate::identity::hostname(value)?).is_some() {
+                    return Err(invalid("repeated hostname selector"));
+                }
+            }
             "--json" => fields = it.next().map(|s| s.to_string()),
             other => {
                 number = Some(
@@ -74,13 +164,13 @@ pub fn parse_pr_view(
         Some(r) => r,
         None => default_repo()?,
     };
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| invalid("-R must be owner/repo"))?;
+    let (hostname, owner, name) = crate::identity::bound_repository(&repo, host.as_deref())?;
+    let hostname = hostname.unwrap_or_default();
     Ok(PrViewRequest {
-        owner: owner.into(),
-        repo: name.into(),
+        owner,
+        repo: name,
         number,
+        hostname,
         fields: fields
             .split(',')
             .map(str::trim)
@@ -103,7 +193,50 @@ fn pr_view(args: &[&str]) -> io::Result<()> {
 
 /// One `pr view` round trip; the Python binding calls this directly.
 pub fn pr_view_request(request: &PrViewRequest) -> io::Result<PrViewResponse> {
-    let (status, body) = client::call("POST", "/v1/pr/view", &request.encode_to_vec())?;
+    if request.fields.is_empty() {
+        return Err(invalid("at least one JSON field is required"));
+    }
+    if request
+        .fields
+        .iter()
+        .any(|field| !crate::fields::PR_FIELDS.contains(&field.as_str()))
+    {
+        let repo = if request.hostname.is_empty() {
+            format!("{}/{}", request.owner, request.repo)
+        } else {
+            format!("{}/{}/{}", request.hostname, request.owner, request.repo)
+        };
+        let args = vec![
+            "pr".into(),
+            "view".into(),
+            request.number.to_string(),
+            "--repo".into(),
+            repo,
+            "--json".into(),
+            request.fields.join(","),
+        ];
+        let response = crate::reads::read(&args)?;
+        if response.exit_code != 0 {
+            return Err(io::Error::other(
+                String::from_utf8_lossy(&response.stderr).into_owned(),
+            ));
+        }
+        let mut json = response.stdout;
+        if json.last() == Some(&b'\n') {
+            json.pop();
+        }
+        return Ok(PrViewResponse {
+            json,
+            source: response.source,
+            error: String::new(),
+        });
+    }
+    let (status, body) = client::call_host(
+        (!request.hostname.is_empty()).then_some(request.hostname.as_str()),
+        "POST",
+        "/v1/pr/view",
+        &request.encode_to_vec(),
+    )?;
     let reply = PrViewResponse::decode(body.as_slice())
         .map_err(|_| io::Error::other(format!("daemon HTTP {status}: undecodable reply")))?;
     if reply.error.is_empty() {
@@ -115,20 +248,28 @@ pub fn pr_view_request(request: &PrViewRequest) -> io::Result<PrViewResponse> {
 
 /// `owner/repo` from the `origin` remote, as gh infers it.
 fn repo_from_git() -> io::Result<String> {
+    if let Ok(repo) = std::env::var("GH_REPO") {
+        return Ok(repo);
+    }
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .output()?;
-    owner_repo_from_url(String::from_utf8_lossy(&output.stdout).trim())
-        .ok_or_else(|| io::Error::other("no github origin remote; pass -R owner/repo"))
+    if !output.status.success() {
+        return Err(io::Error::other("no origin remote; pass -R owner/repo"));
+    }
+    let remote = String::from_utf8_lossy(&output.stdout);
+    let (host, owner, name) = crate::identity::repository(remote.trim())?;
+    Ok(host.map_or_else(
+        || format!("{owner}/{name}"),
+        |host| format!("{host}/{owner}/{name}"),
+    ))
 }
 
+/// Legacy GitHub.com-only helper; general host-aware resolution uses
+/// `identity::repository` so this compatibility API retains its old scope.
 pub fn owner_repo_from_url(url: &str) -> Option<String> {
-    let path = url
-        .strip_prefix("git@github.com:")
-        .or_else(|| url.strip_prefix("https://github.com/"))
-        .or_else(|| url.strip_prefix("ssh://git@github.com/"))?;
-    let path = path.trim_end_matches('/').trim_end_matches(".git");
-    path.contains('/').then(|| path.to_string())
+    let (host, owner, repo) = crate::identity::repository(url).ok()?;
+    (host.as_deref() == Some("github.com")).then(|| format!("{owner}/{repo}"))
 }
 
 #[cfg(test)]
@@ -148,6 +289,39 @@ mod tests {
             ("o", "r", 12)
         );
         assert_eq!(req.fields, ["state", "title"]);
+    }
+
+    #[test]
+    fn repository_host_and_explicit_host_must_agree() {
+        let req = parse_pr_view(
+            &["12", "-R", "GIT.EXAMPLE.COM/o/r", "--json", "state"],
+            no_git,
+        )
+        .expect("parses");
+        assert_eq!(req.hostname, "git.example.com");
+        assert!(
+            parse_pr_view(
+                &[
+                    "12",
+                    "-R",
+                    "git.example.com/o/r",
+                    "--hostname",
+                    "other.example.com",
+                    "--json",
+                    "state"
+                ],
+                no_git
+            )
+            .is_err()
+        );
+        assert!(
+            parse_pr_view(&["12", "-R", "o/r", "-R", "x/y", "--json", "state"], no_git).is_err()
+        );
+        let default = parse_pr_view(&["12", "--json", "state"], || {
+            Ok("git.example.com/o/r".into())
+        })
+        .expect("default repo");
+        assert_eq!(req, default);
     }
 
     #[test]

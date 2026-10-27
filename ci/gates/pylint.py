@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGETS = ["src", "ci", "tests", "action"]
+TARGETS = ["agent-plugin/bootstrap.py", "src", "ci", "tests", "action"]
 
 # Bump deliberately when you want to adopt a newer pylint -- same
 # determinism rationale as ruff.py's RUFF_PIN. `pytest` is added to the

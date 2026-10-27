@@ -9,8 +9,9 @@ loopback round trip.
 | File | What it owns |
 |---|---|
 | `lib.rs` | Module index, `pub(crate) use ghd_platform as platform;`, and `version_banner()` (`ghd <version> (<os>)`). |
-| `proto.rs` | prost messages: `PrViewRequest { owner, repo, number, fields }` and `PrViewResponse { json, source, error }`. Tags are stable — retire with `reserved`, never reuse. |
-| `endpoint.rs` | `Endpoint { port, token }`; `state_dir()`, `parse()`, `read()`, `write()` for `<state dir>/endpoint` (`port token`), written owner-private. |
+| `proto.rs` | prost messages: `PrViewRequest { owner, repo, number, fields, hostname }` and `PrViewResponse { json, source, error }`. Tags are stable — retire with `reserved`, never reuse. |
+| `identity.rs` | Host-bound credentials, canonical repository selectors, fingerprinted daemon directories and deployment API URLs. |
+| `endpoint.rs` | `Endpoint { port, token }`; `state_dir()`, `parse()`, `read()`, `write()` for `<state root>/identities-v1/<digest>/endpoint` (`port token`), written owner-private. |
 | `client.rs` | `call(method, path, body)`: one std `TcpStream` HTTP/1.1 request with the bearer token; `parse_response()` (Content-Length or chunked). Starts the daemon when nothing answers or the token is rejected (401). |
 | `cli.rs` | `run(args)` for every subcommand except `daemon`; `parse_pr_view()`, `pr_view_request()`, `owner_repo_from_url()`, `USAGE`. |
 | `fields.rs` | `PR_FIELDS` (the 20 `gh pr view --json` scalars ghd answers) and `valid_name()` (safe owner/repo names). |
@@ -55,3 +56,31 @@ default-repo function, and response parsing works on byte strings.
 ```bash
 soldr cargo test -p ghd-core --locked
 ```
+
+## Host and credential resolution
+
+`identity.rs` owns GitHub hostname validation, host-bound credential
+precedence, repository selector parsing and API URL construction. Every client
+call resolves an identity before it reads an endpoint. Endpoint directories
+are derived from the credential/host digest, and every loopback request carries
+that digest alongside the per-session bearer token. Raw credentials stay in
+memory and the daemon spawn environment; they never enter paths or logs.
+
+## Compatibility and write custody
+
+`operation.rs` parses GraphQL operation selection. `compat.rs` owns real-gh
+lookup, argument/stream forwarding and conservative command classification.
+`coherence.rs` fences cached reads through a cross-process protobuf journal.
+A pre-dispatch intent remains unresolved on uncertain/failed execution; its
+presence prevents a restart from restoring stale cache authority. A connected
+client request is never replayed automatically after its reply is lost.
+
+Resource reads use `resource.rs` for target binding, field/filter/limit
+normalization and nested-order-preserving projections. `reads.rs` supplies
+the shared CLI/Python protobuf request, explicit backend/context and read-only
+API. The compatibility executor remains the owner of unsupported/interactive
+forms; writes still enter the journal before real gh dispatch.
+
+`rest.rs` handles safe API GET grammar and explicit target binding. It rejects
+cache-ambiguous shapes while compatibility classification still recognizes
+GET/HEAD as reads. REST and resource plans share caller context and protobuf.

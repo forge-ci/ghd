@@ -1,13 +1,14 @@
 //! One std-only HTTP/1.1 call to the loopback daemon, so a warm `ghd`
 //! invocation builds no runtime and no TLS stack. When nothing answers, the
-//! client starts the daemon (once, under a lock) and retries.
+//! client starts the daemon once under a lock. A dispatched call is never
+//! replayed when its reply is lost.
 
 use crate::endpoint::{self, Endpoint};
-use crate::platform;
+use crate::{identity::Identity, platform};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 const START_DEADLINE: Duration = Duration::from_secs(5);
@@ -15,26 +16,103 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `(status, body)` from the daemon, starting it if it is not running.
 pub fn call(method: &str, path: &str, body: &[u8]) -> io::Result<(u16, Vec<u8>)> {
-    match endpoint::read().and_then(|ep| send(&ep, method, path, body)) {
-        Ok(reply) if reply.0 != 401 => Ok(reply),
-        _ => send(&start_daemon()?, method, path, body),
-    }
+    call_host(None, method, path, body)
 }
 
-fn send(ep: &Endpoint, method: &str, path: &str, body: &[u8]) -> io::Result<(u16, Vec<u8>)> {
-    let mut stream = TcpStream::connect(("127.0.0.1", ep.port))?;
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+pub fn call_host(
+    host: Option<&str>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
+    let identity = Identity::resolve(host)?;
+    if let Ok(endpoint) = endpoint::read_for(&identity)
+        && let Ok(stream) = TcpStream::connect(("127.0.0.1", endpoint.port))
+    {
+        // Once connected, any failure may follow dispatch. Never replay it.
+        let reply = send_connected(stream, &identity, &endpoint, method, path, body)?;
+        if reply.0 != 401 {
+            return Ok(reply);
+        }
+        // A 401 is rejected before routing and therefore safe to rediscover.
+    }
+    send_existing(&identity, &start_daemon(&identity)?, method, path, body)
+}
+
+pub(crate) fn send_existing(
+    identity: &Identity,
+    ep: &Endpoint,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
+    let stream = TcpStream::connect(("127.0.0.1", ep.port))?;
+    send_connected(stream, identity, ep, method, path, body)
+}
+
+pub fn caller_key() -> io::Result<String> {
+    let value = match std::env::var("GHD_CALLER_ID") {
+        Ok(value) if value.len() <= 256 => value.into_bytes(),
+        Err(std::env::VarError::NotPresent) => std::env::current_dir()?
+            .as_os_str()
+            .as_encoded_bytes()
+            .to_vec(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GHD_CALLER_ID must contain at most 256 UTF-8 bytes",
+            ));
+        }
+    };
+    Ok(kernal_api::hash::blake3_bytes(&value).to_hex())
+}
+
+fn send_connected(
+    mut stream: TcpStream,
+    identity: &Identity,
+    ep: &Endpoint,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
+    stream.set_read_timeout(Some(
+        if path.starts_with("/v1/admin/") || path == "/v1/health" {
+            Duration::from_secs(5)
+        } else {
+            READ_TIMEOUT
+        },
+    ))?;
+    stream.set_write_timeout(Some(READ_TIMEOUT))?;
+    let policy = crate::request_policy::current();
+    let controlled = policy.active() && method == "POST";
+    let path = if controlled {
+        if path == "/v2/snapshot" {
+            "/v3/snapshot".into()
+        } else {
+            path.replacen("/v1/", "/v2/", 1)
+        }
+    } else {
+        path.into()
+    };
+    let policy_header = if controlled {
+        format!("X-Ghd-Cache-Policy: {}\r\n", policy.header())
+    } else {
+        String::new()
+    };
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\nX-Ghd-Caller: {}\r\n{policy_header}\
          Content-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         ep.token,
+        identity.key(),
+        caller_key()?,
         body.len()
     );
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
-    parse_response(&raw)
+    parse_response(&raw).map_err(|error| io::Error::new(error.kind(),
+        format!("daemon reply lost or invalid; request may have executed and was not replayed: {error}")))
 }
 
 /// Split a complete HTTP/1.1 response into status and (de-chunked) body.
@@ -78,9 +156,13 @@ fn dechunk(mut data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn healthy() -> Option<Endpoint> {
-    let ep = endpoint::read().ok()?;
-    matches!(send(&ep, "GET", "/v1/health", &[]), Ok((200, _))).then_some(ep)
+fn healthy(identity: &Identity) -> Option<Endpoint> {
+    let ep = endpoint::read_for(identity).ok()?;
+    matches!(
+        send_existing(identity, &ep, "GET", "/v1/health", &[]),
+        Ok((200, _))
+    )
+    .then_some(ep)
 }
 
 /// The `ghd` executable that runs the daemon: `$GHD_EXE`, this process when
@@ -110,25 +192,22 @@ fn daemon_exe() -> io::Result<PathBuf> {
 /// Launch `ghd daemon` detached and wait, bounded, for it to answer. An
 /// exclusive lock makes concurrent cold clients start exactly one daemon:
 /// the rest wait on the lock, then find it healthy.
-fn start_daemon() -> io::Result<Endpoint> {
-    let dir = endpoint::state_dir()?;
+pub(crate) fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
+    let dir = endpoint::directory(identity)?;
     platform::fs::create_private_dir(&dir)?;
     let lock = std::fs::File::create(dir.join("start.lock"))?;
     lock.lock()?;
-    if let Some(ep) = healthy() {
+    if let Some(ep) = healthy(identity) {
         return Ok(ep);
     }
     let log = std::fs::File::create(dir.join("daemon.log"))?;
-    platform::process::spawn_detached(
-        Command::new(daemon_exe()?)
-            .arg("daemon")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log),
-    )?;
+    let mut command = Command::new(daemon_exe()?);
+    identity.configure_child(&mut command);
+    command.arg("daemon");
+    platform::process::spawn_detached(&mut command, &log)?;
     let deadline = Instant::now() + START_DEADLINE;
     while Instant::now() < deadline {
-        if let Some(ep) = healthy() {
+        if let Some(ep) = healthy(identity) {
             return Ok(ep);
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -142,6 +221,101 @@ fn start_daemon() -> io::Result<Endpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FixtureDir(PathBuf);
+
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            if self.0.exists() {
+                std::fs::remove_dir_all(&self.0).expect("clean client fixture");
+            }
+        }
+    }
+
+    #[test]
+    fn dispatched_reply_child() {
+        if std::env::var_os("GHD_REPLY_TEST").is_none() {
+            return;
+        }
+        let error = call_host(None, "POST", "/v1/graphql", b"fixture-dispatch-body")
+            .expect_err("lost reply");
+        assert!(error.to_string().contains("not replayed"), "{error}");
+    }
+
+    #[test]
+    fn a_lost_reply_does_not_start_a_second_dispatch() {
+        let root = std::env::temp_dir().join(format!("ghd-lost-reply-test-{}", std::process::id()));
+        assert!(!root.exists(), "fresh fixture directory");
+        let _cleanup = FixtureDir(root.clone());
+        let identity =
+            Identity::from_token("github.com", "fixture-reply-token".into()).expect("identity");
+        let directory = identity.directory(&root);
+        platform::fs::create_private_dir(&directory).expect("fixture directory");
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("port").port();
+        platform::fs::write_private(
+            &directory.join("endpoint"),
+            format!("{port} session").as_bytes(),
+        )
+        .expect("endpoint");
+        listener.set_nonblocking(true).expect("bounded accept");
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture client did not connect before deadline: {error}"),
+                }
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("blocking request reader");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("bounded request read");
+            let mut received = Vec::new();
+            let mut buffer = [0; 512];
+            while !received.ends_with(b"fixture-dispatch-body") {
+                let length = stream.read(&mut buffer).expect("read request");
+                assert_ne!(length, 0);
+                received.extend_from_slice(&buffer[..length]);
+                assert!(received.len() < 4096);
+            }
+            assert!(received.starts_with(b"POST /v1/graphql"));
+            // The operation was dispatched, but its reply is lost.
+        });
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "client::tests::dispatched_reply_child",
+                "--nocapture",
+            ])
+            .env("GHD_REPLY_TEST", "1")
+            .env("GHD_STATE_DIR", &root)
+            .env("GH_HOST", "github.com")
+            .env("GH_TOKEN", "fixture-reply-token")
+            .env("GHD_EXE", root.join("must-not-be-started"))
+            .output()
+            .expect("child");
+        let server_result = server.join();
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        server_result.expect("server");
+        assert!(
+            !directory.join("daemon.log").exists(),
+            "no fallback daemon was started"
+        );
+    }
 
     #[test]
     fn parses_a_content_length_response() {

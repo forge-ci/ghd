@@ -18,6 +18,7 @@ doctest = false
 
 [dependencies]
 ghd-core = { path = "../ghd-core" }
+ghd-platform = { path = "../ghd-platform" }
 kernal-api = { workspace = true }
 prost = { workspace = true }
 

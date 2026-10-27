@@ -88,6 +88,7 @@ fresh window, which is exactly what an agent's re-check loop hits.
 ```text
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
 ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
+ghd gh <args...>                                    forward to real gh safely
 ghd stats                                           what the daemon saved
 ghd daemon                                          run the daemon (auto-started)
 ghd --version | --help
@@ -96,11 +97,114 @@ ghd --version | --help
 **`ghd pr view`**
 - Same output as `gh pr view --json`. Without `-R`, the repository comes
   from the `origin` remote, as with `gh`.
-- Supported `--json` fields so far are the plain scalars: `additions`,
+- The direct batched GraphQL path supports the plain scalars: `additions`,
   `baseRefName`, `body`, `changedFiles`, `closed`, `closedAt`, `createdAt`,
   `deletions`, `headRefName`, `headRefOid`, `id`, `isDraft`,
   `mergeStateStatus`, `mergeable`, `mergedAt`, `number`, `state`, `title`,
   `updatedAt` and `url`.
+
+- Nested fields such as `reviews`, `author`, `labels` and `statusCheckRollup`
+  use the shared resource reader described below, also available to Python.
+
+**Resource and collection reads**
+
+`ghd issue view 42 -R owner/repo --json number,title` and `ghd issue list
+-R owner/repo --json number,title --limit 10` cache canonical JSON in the
+daemon. PR list/checks and run view/list use the same reader. Field order,
+subsets, supersets, `--jq` and templates share data; filter values, run attempts,
+hosts and credential identities stay separate. Missing fields trigger a union
+fetch. Pending checks preserve gh exit 8; failed checks preserve exit 1.
+
+Lists share up to 100 rows across requested limits. Larger limits retain gh's
+native pagination and cache exact output. A reached limit never establishes
+that the collection is complete. Run collections use conditional REST GETs
+when the selected fields come from that collection; a 304 reuses the retained
+body. `workflowName` and jobs require native gh metadata reads. JSON nulls and
+nested data preserve gh's output, including nested member order.
+
+Diagnostic (`GH_DEBUG`/`DEBUG`) and forced-terminal reads execute directly;
+credential-bearing API traces are never cached. Exit status follows real gh:
+for example, gh 2.98's JSON checks exporter returns 0 for pending checks,
+while its plain output returns 8. ghd retains each result's actual status.
+
+Headless cached reads require an explicit repository (`-R`, a repository view
+selector, or `GH_REPO`). Unbound, interactive, watch and unsupported shapes
+retain real gh behavior. The existing scalar `pr view` path still resolves
+`origin` and batches GraphQL. Other recognized safe families cache exact gh
+output; see the [command matrix](docs/GHX_PARITY.md#read-command-matrix).
+
+Python has the same behavior through `ghd.bindings.gh_read(args)`, returning
+stdout/stderr bytes, exit code, source and `limit_reached`. The existing
+`pr_view()` binding accepts nested fields too. jq and templates use real gh's
+renderer on a private authenticated loopback body, with separate credentials
+and no external proxy access.
+
+The daemon shares one LRU budget across PR, GraphQL, resource and REST reads.
+`GHD_CACHE_MAX_ENTRIES` defaults to 4096; `GHD_CACHE_MAX_BYTES` defaults to
+67108864. Either zero disables retention. The byte charge includes response
+bodies, fields and per-key bookkeeping; it is not a process RSS limit. At most
+32 reads own active slots; admission waits up to one second before a busy error.
+Four upstream subprocess permits and 32 MiB output bounds remain separate.
+
+Set `GHD_CACHE_DISK=1` to opt into private, identity-bound restart snapshots
+under the identity's `cache-v1/` directory. Disk has its own entry/byte limits
+using the same configured values. Only PR, run collection and REST bodies with
+origin validators are persisted. Every restored body starts stale and requires
+upstream validation, even inside the old TTL. Writes invalidate disk generations
+while the daemon is stopped too. Corruption, incompatible schema, unsafe file
+permissions, interrupted staging, busy locks and failed publication produce
+explicit errors. Interrupted stages require recovery before another disk write;
+disable disk caching while preserving those files for inspection. Leave
+this option unset for memory-only operation. Invalid limit values are errors.
+
+Persistence uses owner-private files, bounded protobuf/checksum envelopes,
+interprocess locks and atomic replacement on Linux, macOS and Windows. It
+supports process-crash recovery; it does not promise filesystem/power-loss
+transaction durability. Restored bytes never bypass origin validation. The
+short freshness default is unchanged. `GHD_CACHE_TTLS` accepts up to 32 explicit
+command TTLs in milliseconds, for example
+`'{"issue view":0,"run list":1000,"api rest":500}'`. Zero forces validation.
+`GHD_CACHE_SETTLED_MS=60000` optionally extends completed `run view` projections
+only when `--attempt` is explicit and requested fields are limited to `attempt`,
+`conclusion`, `databaseId`, `headSha`, `number`, `startedAt`, `status` and `url`.
+Mutable metadata such as `workflowName` keeps the ordinary command TTL, even
+when sharing the same body. Observed origin cache policy caps configured TTLs; opaque gh command output
+does not expose HTTP headers.
+
+Daemon-managed upstream operations share four dispatch slots, with at most
+three routine operations so one remains available to essential work.
+`GHD_RATE_RESERVE` (default 0) protects that many estimated remaining units in
+each observed bucket. A known empty bucket still refuses calls at reserve 0.
+Daemon GraphQL writes and REST requests with explicit no-cache policy may use
+a positive reserve; they cannot bypass exhaustion or provider cooldown. Fresh
+cache hits use no dispatch slot. A forced origin read fails explicitly when
+refused and never receives an old body as a fallback.
+
+Cooldown honors 429, rate-limited 403 and GraphQL HTTP-200 rate errors;
+ordinary authorization denials do not trigger it. Retry-After seconds/dates and
+primary reset timestamps take precedence; missing hints use exponential
+backoff from 60 seconds, capped at one hour. Private governor state survives
+restart even when disk body caching is disabled. `rate_limit` remains fresh
+and may bypass budget/cooldown policy while still obeying physical capacity.
+
+Reservations coordinate daemon processes of the same credential identity. Each
+minimum dispatch reservation is an estimate; variable GraphQL costs, hidden gh
+subrequests and external credential users prevent it from being an exact point
+meter. Validated 304s release their unused reservation. Stats keep actual
+provider observations separate from dispatch counts and estimates. The scope
+is daemon-managed HTTP/read routes; interactive and native passthrough streams
+and separately invoked gh processes are not intercepted.
+
+`GHD_CALLER_ID` optionally labels a caller (at most 256 UTF-8 bytes); labels and
+the default working-directory identity are hashed before reporting. Caller
+metadata never splits cached bodies. `ghd stats` reports bounded per-caller
+requests, cache hits, HTTP/gh dispatches, refusals and revalidations since this
+daemon started. Batch dispatches belong to the request that opened the batch.
+There are no per-caller caps or priority queues. Semaphore and custody waits
+are individually bounded; callers receive a busy error and choose whether to
+retry. Canceled native children keep capacity until reaped. Unresolved dispatch
+reservations last at most three minutes, followed by a one-minute conservative
+cooldown measured from that lease deadline; commands are never auto-replayed.
 
 **`ghd api graphql`**
 - Takes gh's `-f` (string) and `-F` (typed, `@file`) fields and prints
@@ -109,6 +213,24 @@ ghd --version | --help
 - Mutations always go upstream and clear the query cache, so no read
   returns data from before a write.
 - A body with `errors` is printed and the command exits 1, as with gh.
+
+**`ghd api <endpoint>`** caches safe REST GET bodies and revalidates expired
+entries with their ETag. A 304 returns the retained body. `--hostname`, custom
+representation headers and parameters stay isolated; `--jq` and templates use
+the retained raw body. No-store and Range reads are never reused. Calls to
+`rate_limit` always measure the provider rather than returning a cached sample.
+
+Explicit `--include`, pagination/slurp, verbose/silent modes, file/stdin inputs,
+custom authorization and caller-supplied validators keep real gh execution.
+These modes retain their original headers, pages, bytes and status; they are
+not advertised as conditional-cache support. POST and other unsafe methods
+still enter the shared write fence.
+
+REST telemetry adds `rest_http_operations`, `rest_http_responses`, `rest_304`,
+cache/error counters and `rest_provider_budgets`. Operations count logical gh
+API dispatches, including failed attempts; they do not enumerate redirect
+hops. A 304 is an HTTP operation. Provider budgets are observed bucket totals
+across clients, not inferred points spent by this daemon.
 
 **`ghd stats`** prints the daemon's counters as JSON: `reads`,
 `served_fresh`, `sentinel_304_free`, `sentinel_200`, `graphql_queries`,
@@ -119,14 +241,68 @@ ghd --version | --help
 **`ghd daemon`** runs the daemon in the foreground. You rarely need it: one
 start lock means concurrent cold clients start exactly one daemon.
 
+## Forwarding commands and writes
+
+`ghd gh <args...>` forwards arguments and the original stdin/stdout/stderr to
+real GitHub CLI when the shape is not eligible for a cached read. Eligible
+headless reads go through the daemon's shared reader. Unknown top-level
+commands also pass through. A request already dispatched to a daemon is never
+replayed as a fallback. `GHD_GH_PATH` selects a real `gh` executable explicitly. Recursive
+shims are rejected.
+
+Known safe reads pass through without a write fence. Mutations and unknown
+commands record an intent in the shared write journal before dispatch. Every
+daemon checks the journal before and after cached reads. A completed write
+advances the generation and invalidates PR, raw GraphQL, resource-read and REST caches,
+including results still in flight. This also works when a daemon was stopped
+while a subprocess performed the write.
+
+A failed, interrupted or uncertain write leaves an intent visible across
+restarts. Cached reads then fail explicitly rather than silently returning
+pre-write data. This conservative policy includes nonzero subprocess exits;
+`pr checks` pending exit 8 is a known read and does not create an intent.
+Do not remove the journal to bypass an unresolved write: confirm the writer's
+completion before recovery. The cache-management recovery command is being
+implemented with the lifecycle controls under issue #14.
+
+Native GraphQL requests parse the complete document, honor `operationName`
+and refuse malformed, ambiguous or subscription operations before upstream
+execution. Typed `-F query=@-` reads stdin, as does real gh's passthrough path.
+
 ## Configuration
 
 | variable | effect |
 |---|---|
+| `GHD_STATE_DIR` | absolute private state root override; invalid relative paths fail |
+| `GHD_GH_PATH` | real GitHub CLI executable for passthrough and credential lookup |
 | `GHD_FRESH_MS` | fresh window in milliseconds (default 2000), read once at daemon start |
 | `GHD_DEBUG` | when set, prints which step (`fresh`, `revalidated`, `fetched`) answered each read |
 | `GHD_EXE` | the `ghd` executable used to start the daemon, if not the current one |
 | `GH_TOKEN` / `GITHUB_TOKEN` | the token the daemon uses; falls back to `gh auth token` |
+
+## GitHub identities and Enterprise
+
+Each call resolves the selected GitHub hostname and credential before looking
+up a daemon. Daemons, caches, startup locks and logs are partitioned by a
+cryptographic fingerprint of both values; raw tokens never appear in paths.
+Token rotation selects a new daemon. Existing legacy endpoint files are ignored.
+
+State directories and files enforce current-user ownership, including elevated
+Windows tokens. Existing directories are validated as well as newly created
+ones. Publication uses unique private stages and leaves interrupted legacy
+staging files untouched; stale stages cannot block a fresh write.
+
+Use `GH_HOST` to select a host, `ghd pr view 12 -R git.example.com/owner/repo
+--json state` to bind a repository host, or `ghd api graphql --hostname
+git.example.com -f 'query={viewer{login}}'`. `GH_REPO` supplies the default
+repository before the origin remote. Conflicting explicit host selectors fail.
+
+For github.com and subdomains of ghe.com, credentials use `GH_TOKEN`, then
+`GITHUB_TOKEN`. Other hosts use `GH_ENTERPRISE_TOKEN`, then
+`GITHUB_ENTERPRISE_TOKEN`. If neither is set, `gh auth token --hostname HOST`
+resolves the stored credential. A missing credential fails before cache access.
+The Python `pr_view` binding uses the same resolver and accepts a
+`hostname/owner/repo` repository selector.
 
 ## Use it with agents
 
@@ -198,3 +374,190 @@ no stored secrets. See [RELEASE.md](RELEASE.md).
 ## License
 
 [MIT](LICENSE)
+
+## Repository planning snapshots
+
+`ghd snapshot -R owner/repo` returns one schema-v1 JSON document with the
+default branch, open PR heads, reviews, changed files and head check contexts.
+Use `--hostname host` or a host-qualified repository for Enterprise. `GH_REPO`
+can supply the repository; this command does not infer it from Git.
+`--limit 1..100` bounds open PRs (default 100). Nested selections are bounded
+too; inspect `truncated`, connection `totalCount` and `pageInfo` before treating
+any selection as complete. An empty repository has a null default branch.
+
+Ordinary concurrent reads share the identity/repository/backend cache window.
+`ghd snapshot -R owner/repo --fresh` always dispatches a new upstream request
+with revalidation headers, bypassing the daemon window and real gh's API cache.
+Origin failure or explicitly stale downstream output produces exit 3, no JSON,
+and a diagnostic on stderr. Input/transport errors use exit 1. No client can
+force an intermediary that ignores HTTP revalidation to disclose its age.
+
+For planning during an outage, `--allow-stale` explicitly permits a retained
+body or a downstream-marked stale response. Accepted output exits 0 and carries
+`freshness.source`, `stale`, `age_ms` (null when unknown), `captured_at_ms` and
+`reason`. It cannot be combined with `--fresh`. A mutation generation change
+still invalidates retained planning data. Snapshot bodies are memory-only,
+share the global retention limits, and respect origin storage/freshness policy.
+`GHD_CACHE_TTLS='{"snapshot read":1000}'` changes the ordinary window.
+
+Python uses the same implementation:
+
+```python
+from ghd.bindings import snapshot
+
+result = snapshot("owner/repo", fresh=True)
+if result.exit_code == 0:
+    document = result.data
+```
+
+`SnapshotResult` preserves JSON bytes, exit code, source, age, stale/truncation
+flags and the refusal diagnostic. Configuration/transport errors raise
+`OSError`; a freshness refusal returns exit code 3 and `data is None`.
+
+## Daemon and cache operations
+
+`ghd daemon status` inspects the current host/credential identity without
+starting it. It prints `healthy` (exit 0), `missing` or `stale` (exit 3) as
+JSON. `ghd daemon start`, `stop` and `restart` serialize maintenance through
+a private lock. Stop is authenticated, never signals a PID, rejects active
+requests/upstream workers, and waits for lifetime ownership release. Retry a
+busy stop once reads finish. `ghd daemon` still runs in the foreground.
+
+`ghd cache stats` and `ghd cache keys` inspect the running daemon. Keys contain
+only namespace/digest identifiers, counts and accounted retained bytes.
+`ghd cache flush` advances the shared mutation generation, invalidating active
+publishers, all identity partitions and restart bodies, then clears local
+retention. It does not reset governor cooldown or resolve uncertain writes.
+These inspection/flush commands do not auto-start a missing daemon.
+
+Prefix a managed headless read with `--no-cache` to bypass both retained and
+restart bodies without publishing its response into shared retention:
+
+```bash
+ghd --no-cache gh issue view 42 -R owner/repo --json title
+ghd --ttl 0 gh issue view 42 -R owner/repo --json title
+```
+
+`--ttl MS` caps this request's freshness window; zero requires revalidation,
+which may use an existing validator. Neither option changes another caller's
+defaults or extends origin freshness. Explicit bypass uses its own slot and
+requests HTTP revalidation on API fetches. Unsupported/interactive passthrough
+forms reject cache controls. Python `gh_read(args, no_cache=True)` and
+`gh_read(args, ttl_ms=0)` carry the same versioned controls. Use snapshot
+`--fresh` when you need its stricter authority/exit contract.
+
+Set `GHD_CONFIG` to an absolute owner-private JSON file (at most 16 KiB):
+
+```json
+{"GHD_FRESH_MS":2000,"GHD_CACHE_MAX_ENTRIES":4096,"GHD_CACHE_DISK":0,
+ "GHD_CACHE_TTLS":{"issue view":1000}}
+```
+
+Supported keys are `GHD_FRESH_MS`, `GHD_CACHE_MAX_ENTRIES`,
+`GHD_CACHE_MAX_BYTES`, `GHD_RATE_RESERVE`, `GHD_CACHE_SETTLED_MS`,
+`GHD_CACHE_DISK` (integer 0/1), and `GHD_CACHE_TTLS` (command/ms object).
+Other numeric settings require nonnegative integers. Unknown keys, invalid
+types and unreadable/non-private files fail explicitly. Environment settings
+override file settings; built-in defaults apply last. Per-command TTL policy
+overrides the daemon default; per-request TTL and origin policy cap that
+result. Restart validates configuration before stopping a healthy daemon.
+
+For a supervised service, run the absolute installed `ghd daemon` executable
+as the credential's user, with a private state/config directory and the same
+`GH_HOST`/credential environment as clients. Keep credentials out of service
+command arguments. On Linux a user systemd unit can use `Type=simple`,
+`ExecStart=/absolute/path/ghd daemon`, `ExecStop=/absolute/path/ghd daemon stop`,
+and `Restart=on-failure`. macOS LaunchAgents and Windows user task/service
+supervisors use the same foreground command and authenticated stop command;
+configure their user environment explicitly. No system service is installed.
+A stale endpoint can be replaced by `daemon start` after ownership is free.
+Preserve private state when investigating interrupted publication/uncertain
+writes; flush/restart deliberately cannot erase that evidence or claim an
+unknown upstream mutation succeeded.
+
+## Private diagnostics and offline replay
+
+`ghd ledger` exports schema-v1 JSON for the latest 256 daemon-managed read
+requests (and explicitly marked GraphQL writes). Rows distinguish safe command labels, hashed callers, hits, misses,
+coalescing, conditional 304, stale planning and refusals, with response payload
+bytes and latency in microseconds. The export includes LRU eviction count,
+window command totals, capacity and dropped-row count. `ghd stats` includes
+the ledger summary alongside existing provider observations/governor metrics.
+An opaque request hash supports conservative exact-request comparison; it
+does not reveal repository names or prove semantic resource equivalence.
+
+Raw arguments and response bodies are never logged. `GHD_LOG_ARGS=1` (also a
+0/1 config-file key) opts into bounded flag-name capture: all argument values,
+headers, variables, input paths and unrecognized tokens remain `[redacted]`.
+The ledger is in memory only and resets on restart. Requests rejected before
+authentication/routing, native passthrough and external gh work are outside it.
+Managed dispatch counts are logical operations, not exact HTTP hops or point
+costs; unassigned batch work is null/unknown, not zero.
+
+`ghd dashboard` prints a read-only HTML snapshot of the same evidence. The
+loopback `/v1/dashboard` and `/v1/ledger` endpoints require the existing private
+bearer/identity authentication, prohibit framing and disable storage/scripts.
+They do not expose a token in a URL or open a public listener. Management
+routes reject Origin-bearing writes; the dashboard has no mutation controls.
+
+```bash
+ghd ledger > workload.json
+ghd replay workload.json --ttl 2000
+```
+
+Replay never contacts gh, GitHub or the daemon. It accepts a regular JSON file
+up to 16 MiB and 4096 records, with a TTL up to one day. Writes, forced/bypass reads and stale/refused output are excluded from modeled
+reuse; recorded writes clear modeled retention. It reports the input
+BLAKE3 digest, eligible records, modeled exact-key hits/logical origin reads,
+known observed dispatches and unknown records. Provider points saved remain
+null. The model assumes completion-time order and a fixed supplied TTL; it
+does not infer sharing between different hashes or simulate mutations, origin
+cache policy or work outside the bounded export. Treat output as a workload
+scenario, not measured quota savings or a TTL recommendation.
+
+## Agent plugin and managed GitHub CLI
+
+[agent-plugin](./agent-plugin/README.md) supplies a local plugin manifest,
+scoped preference skill and cross-platform Python installer. Optional
+`--launchers DIR` generates Unix/CMD entry points and `gh` wrappers in a
+separate trusted directory outside the managed root and repository checkout.
+Installation is explicit: provide an absolute private root, exact version,
+trusted artifact SHA256 and exact archive member. Use an existing soldr-built
+wheel for ghd or a pinned official GitHub CLI archive for managed gh. Offline
+`--archive` and credential-free HTTPS `--url` use the same verification path.
+
+The bootstrap checks the entire archive, rejects non-regular/ambiguous members,
+and passes the selected binary to the native publisher. The publisher checks
+its SHA256 and version, creates owner-private files, and atomically switches
+a bounded record to an immutable BLAKE3-named binary. Archives are limited to
+128 MiB; binaries to 64 MiB. A capability check rejects older publishers before
+any `tools` operation. A version string alone is insufficient provenance: use
+a checksum from a trusted release/CI channel. No public release is created by
+this repository change.
+
+Set `GHD_PLUGIN_HOME` to the verified root for plugin wrappers. Runtime, status
+and uninstall need a separately trusted ghd publisher outside that root, from
+`--ghd`, `GHD_PUBLISHER` or system PATH. That native boundary validates private
+record/body custody before execution and pins cold autostart to the managed
+image. They preserve
+arguments, standard streams and completed child status through `ghd gh`. They
+do not alter global PATH/agent configuration or download a missing tool.
+`GHD_GH_PATH` explicitly selects system gh. Opt-in `GHD_MANAGED_GH_DIR` selects
+a published managed gh; the plugin wrapper selects its own root when it has
+a gh record. Missing/corrupt selected state fails explicitly. The resolver
+skips its own marked wrapper instead of recursing. Direct native API reads
+retain their existing independence from gh.
+
+With `uninstall --kind ghd --launchers DIR`, owned generated launchers and their
+private Python payload are removed too; marker/lock files remain for safe
+reuse. The plugin README documents install/status/upgrade/uninstall commands and
+offline operation. Stop consumers before cleanup on Windows. If an old running
+binary blocks cleanup after a new record was published, the operation reports
+an error; inspect status before retrying. Further publication first clears
+obsolete owned objects, and interrupted private stages block publication.
+Uninstall removes the selected tool's objects/record, retaining coordination
+locks and other user data. The shipped skill keeps tool preference scoped to
+the user's selected context and preserves write authorization/freshness fences.
+
+Local plugin delivery is implemented here; published packages/catalog adapters
+are tracked separately in [#20](https://github.com/forge-ci/ghd/issues/20).

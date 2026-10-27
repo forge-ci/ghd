@@ -74,7 +74,7 @@ fn help_lists_the_subcommands() {
     let output = run(&["--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for sub in ["pr view", "stats", "daemon"] {
+    for sub in ["gh <args...>", "pr view", "stats", "daemon"] {
         assert!(stdout.contains(sub), "--help is missing {sub:?}: {stdout}");
     }
 }
@@ -84,4 +84,125 @@ fn pr_view_without_a_number_fails_before_any_network_call() {
     let output = run(&["pr", "view", "-R", "o/r", "--json", "state"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("missing PR number"));
+}
+
+#[cfg(test)]
+mod passthrough_tests {
+    use super::*;
+
+    struct FixtureState(std::path::PathBuf);
+
+    impl Drop for FixtureState {
+        fn drop(&mut self) {
+            if self.0.exists() {
+                std::fs::remove_dir_all(&self.0).expect("clean fixture state");
+            }
+        }
+    }
+
+    #[test]
+    fn passthrough_fixture() {
+        if std::env::var_os("GHD_FIXTURE").is_none() {
+            return;
+        }
+        use std::io::Read;
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input).expect("stdin");
+        println!("FIXTURE_STDIN={input}");
+        println!(
+            "FIXTURE_ARGS={:?}",
+            std::env::args().skip(1).collect::<Vec<_>>()
+        );
+        eprintln!("fixture-stderr");
+        std::process::exit(7);
+    }
+
+    #[test]
+    fn unbrokered_commands_do_not_resolve_credentials() {
+        let root =
+            std::env::temp_dir().join(format!("ghd-local-command-test-{}", std::process::id()));
+        assert!(!root.exists());
+        let _cleanup = FixtureState(root.clone());
+        let bin = std::env::var("CARGO_BIN_EXE_ghd").expect("binary");
+        let fixture = std::env::current_exe().expect("fixture executable");
+        for args in [["auth", "status"], ["config", "list"]] {
+            let output = Command::new(&bin)
+                .arg("gh")
+                .args(args)
+                .env("GHD_GH_PATH", &fixture)
+                .env("GHD_STATE_DIR", &root)
+                .env_remove("GH_TOKEN")
+                .env_remove("GITHUB_TOKEN")
+                .env_remove("GH_ENTERPRISE_TOKEN")
+                .env_remove("GITHUB_ENTERPRISE_TOKEN")
+                .output()
+                .expect("local passthrough");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // The real-gh fixture is this executable's test harness. Its
+            // output proves execution reached it without daemon discovery.
+            assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok"));
+            assert!(
+                !root.exists(),
+                "local commands cannot create a daemon or write journal"
+            );
+        }
+    }
+
+    #[test]
+    fn passthrough_preserves_stdin_literal_args_stderr_and_exit_code() {
+        use std::io::Write;
+        let root =
+            std::env::temp_dir().join(format!("ghd-passthrough-test-{}", std::process::id()));
+        assert!(!root.exists(), "test owns a fresh directory");
+        let _cleanup = FixtureState(root.clone());
+        let bin = std::env::var("CARGO_BIN_EXE_ghd").expect("binary");
+        let fixture = std::env::current_exe().expect("fixture executable");
+        let mut child = Command::new(bin)
+            .args([
+                "gh",
+                "--exact",
+                "passthrough_tests::passthrough_fixture",
+                "--nocapture",
+                "--",
+                "--jq",
+                ".title",
+                "--template",
+                "{{ .title }}",
+                "@-",
+            ])
+            .env("GHD_GH_PATH", fixture)
+            .env("GHD_FIXTURE", "1")
+            .env("GHD_STATE_DIR", &root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn ghd");
+        child
+            .stdin
+            .take()
+            .expect("stdin pipe")
+            .write_all(b"piped-body")
+            .expect("write stdin");
+        let output = child.wait_with_output().expect("output");
+        assert_eq!(output.status.code(), Some(7));
+        assert!(
+            ghd::coherence::Journal::at(root.join("coherence-v1"))
+                .epoch()
+                .is_err(),
+            "a nonzero writer may have partially succeeded and must remain fenced"
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF8");
+        assert!(stdout.contains("FIXTURE_STDIN=piped-body"));
+        assert!(stdout.contains("--jq") && stdout.contains(".title"));
+        assert!(stdout.contains("{{ .title }}") && stdout.contains("@-"));
+        assert_eq!(
+            String::from_utf8(output.stderr).expect("stderr"),
+            "fixture-stderr\n"
+        );
+    }
 }
