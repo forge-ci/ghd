@@ -16,6 +16,7 @@ usage:
   ghd snapshot -R owner/repo [--fresh|--allow-stale] repository planning snapshot
   ghd stats | ledger | dashboard                       private diagnostics
   ghd replay FILE --ttl MS                             offline exact-key model
+  ghd tools publish|status|uninstall ...               verified tool maintenance
   ghd daemon [start|stop|restart|status]                foreground or lifecycle
   ghd cache stats|keys|flush                           inspect or invalidate
   ghd [--no-cache] [--ttl MS] gh <read args...>         per-request cache control
@@ -49,6 +50,7 @@ fn run_inner(args: &[String]) -> io::Result<()> {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
+        ["tools", rest @ ..] => crate::managed::run(rest),
         ["ledger" | "dashboard"] => crate::operations::run(&args),
         ["replay", rest @ ..] => crate::diagnostics::run(rest),
         ["daemon", rest @ ..] if !rest.is_empty() => crate::operations::run(rest),

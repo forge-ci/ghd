@@ -26,8 +26,8 @@ The recurring review issue stays open as a maintenance responsibility.
 | #13 | Repository snapshots and authority freshness | Implemented and locally verified; draft PR #18 |
 | #14 | Daemon/cache operations and configuration | Implemented and locally verified; draft PR #18 |
 | #15 | Diagnostics, dashboard and replay | Implemented and locally verified; draft PR #18 |
-| #16 | Agent plugin and managed gh distribution | Pending |
-| #17 | Standing upstream inspection list | Existing assigned tracker; final reconciliation pending |
+| #16 | Agent plugin and managed gh distribution | Implemented and locally verified; draft PR #18 |
+| #17 | Standing upstream inspection list | Assigned monthly manual tracker; remains open after delivery |
 
 ## Host and credential isolation (#7)
 
@@ -426,3 +426,42 @@ failed broad run is not reported as passed; the planner mismatch is tracked
 in [#19](https://github.com/forge-ci/ghd/issues/19). Local fixture correction
 passes `./ci.py all` with 179 Python cases, clean review and zero precheck
 violations (the same 17 local review items).
+
+## Agent plugin and explicit managed gh (#16)
+
+The delivered local plugin contains a scoped skill, Unix/CMD entry points and
+verified native-wheel bootstrap. Managed gh uses the same explicit pinned
+archive flow, native private publication and existing resolver; system gh
+remains selectable and own-shim recursion is rejected. Ordinary calls never
+download tools. Public release/catalog surfaces are separate from this local
+manifest/skill/wrapper delivery and must not be represented as published.
+
+The installed pre-feature RED fails because the bootstrap/publisher is absent.
+Archive cases cover SHA mismatch, links/traversal, bounded reads and HTTPS
+downgrade rejection. Installed cases cover private publication/status/uninstall,
+unchanged record on bad pin, corrupt-body refusal, concurrent managed gh/system
+selection and wrapper arguments/streams/status. A local Nix timestamp issue is
+fixed in the fixture without modifying/stripping the selected system tool.
+Review exposed mutable-root self-validation and unpinned cold autostart. A
+retained RED executes a public forged root with the old wrapper; runtime now
+delegates to a separately trusted publisher outside the root, which validates
+native custody and pins GHD_EXE. The cold regression removes inherited GHD_EXE
+and system-ghd discovery. ZIP device/FIFO/directory modes are rejected, and
+probe output is capped during collection with owned transport cleanup.
+Final `./ci.py all` passes every gate and 188 Python cases; read-only
+review is clean. Native wrapper validation follows the feature push.
+
+Native fixture correction 4ca7011 passed [run40521372429](https://github.com/forge-ci/ghd/actions/runs/40521372429):
+fast/Dylint/CI OK and all five additional native lanes. Linux ARM64 and each
+macOS lane passed120 installed integration cases; each Windows lane passed99
+with21 existing real-gh Unix-transport skips. This qualifies #14/#15 native
+behavior, not the subsequently uncommitted plugin.
+
+The contract initially rejected four tracked shell launchers. The product
+installer now generates those interfaces and a private Python payload only
+into an explicitly selected trusted directory outside the managed root; source
+automation remains Python. Precheck returns zero violations, zero exceptions
+and the same17 local review items. Owned launcher uninstall is explicit.
+Remaining published plugin packages/catalog qualification is tracked in
+[#20](https://github.com/forge-ci/ghd/issues/20), separate from verified local
+bootstrap delivery.

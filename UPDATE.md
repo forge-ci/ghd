@@ -193,3 +193,14 @@ references removed concepts is worse than no procedure.
   write rejection, without exposing credentials in dashboard URLs.
 - Add bounded, network-free exact-key replay with input digest/provenance,
   explicit model assumptions and unknown provider-point savings.
+
+## ghx parity: agent plugin and explicit managed gh (#16)
+
+- Ship a local plugin manifest, scoped agent skill, generated Unix/CMD launchers and an
+  explicit offline/HTTPS bootstrap using pinned version/member/SHA256 inputs.
+- Reuse native wheel binaries and existing kernel hashing/private filesystem
+  primitives for checksum/version validation and atomic tool publication.
+- Add opt-in managed gh and own-shim rejection to the existing resolver, with
+  explicit system-gh precedence and no download during ordinary calls.
+- Document status, pinned upgrades, uninstall, bounded artifacts, custody and
+  cleanup failures. Public release/catalog distribution is tracked separately in #20.

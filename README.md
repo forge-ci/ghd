@@ -514,3 +514,50 @@ null. The model assumes completion-time order and a fixed supplied TTL; it
 does not infer sharing between different hashes or simulate mutations, origin
 cache policy or work outside the bounded export. Treat output as a workload
 scenario, not measured quota savings or a TTL recommendation.
+
+## Agent plugin and managed GitHub CLI
+
+[agent-plugin](./agent-plugin/README.md) supplies a local plugin manifest,
+scoped preference skill and cross-platform Python installer. Optional
+`--launchers DIR` generates Unix/CMD entry points and `gh` wrappers in a
+separate trusted directory outside the managed root and repository checkout.
+Installation is explicit: provide an absolute private root, exact version,
+trusted artifact SHA256 and exact archive member. Use an existing soldr-built
+wheel for ghd or a pinned official GitHub CLI archive for managed gh. Offline
+`--archive` and credential-free HTTPS `--url` use the same verification path.
+
+The bootstrap checks the entire archive, rejects non-regular/ambiguous members,
+and passes the selected binary to the native publisher. The publisher checks
+its SHA256 and version, creates owner-private files, and atomically switches
+a bounded record to an immutable BLAKE3-named binary. Archives are limited to
+128 MiB; binaries to 64 MiB. A capability check rejects older publishers before
+any `tools` operation. A version string alone is insufficient provenance: use
+a checksum from a trusted release/CI channel. No public release is created by
+this repository change.
+
+Set `GHD_PLUGIN_HOME` to the verified root for plugin wrappers. Runtime, status
+and uninstall need a separately trusted ghd publisher outside that root, from
+`--ghd`, `GHD_PUBLISHER` or system PATH. That native boundary validates private
+record/body custody before execution and pins cold autostart to the managed
+image. They preserve
+arguments, standard streams and completed child status through `ghd gh`. They
+do not alter global PATH/agent configuration or download a missing tool.
+`GHD_GH_PATH` explicitly selects system gh. Opt-in `GHD_MANAGED_GH_DIR` selects
+a published managed gh; the plugin wrapper selects its own root when it has
+a gh record. Missing/corrupt selected state fails explicitly. The resolver
+skips its own marked wrapper instead of recursing. Direct native API reads
+retain their existing independence from gh.
+
+With `uninstall --kind ghd --launchers DIR`, owned generated launchers and their
+private Python payload are removed too; marker/lock files remain for safe
+reuse. The plugin README documents install/status/upgrade/uninstall commands and
+offline operation. Stop consumers before cleanup on Windows. If an old running
+binary blocks cleanup after a new record was published, the operation reports
+an error; inspect status before retrying. Further publication first clears
+obsolete owned objects, and interrupted private stages block publication.
+Uninstall removes the selected tool's objects/record, retaining coordination
+locks and other user data. The shipped skill keeps tool preference scoped to
+the user's selected context and preserves write authorization/freshness fences.
+
+Local plugin delivery is implemented here; published packages/catalog adapters
+are tracked separately in [#20](https://github.com/forge-ci/ghd/issues/20).

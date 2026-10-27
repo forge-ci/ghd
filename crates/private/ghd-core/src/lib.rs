@@ -71,3 +71,5 @@ pub mod operations;
 pub mod config;
 
 pub mod diagnostics;
+
+pub mod managed;

@@ -59,18 +59,35 @@ pub fn command() -> io::Result<Command> {
     let name = format!("gh{}", platform::host::exe_suffix());
     let path = match std::env::var_os("GHD_GH_PATH").filter(|v| !v.is_empty()) {
         Some(path) => PathBuf::from(path),
-        None => std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-            .map(|dir| dir.join(&name))
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
+        None if std::env::var_os("GHD_MANAGED_GH_DIR").is_some() => {
+            crate::managed::selected_gh()?.ok_or_else(|| io::Error::other("managed gh missing"))?
+        }
+        None => {
+            let candidates: Vec<_> = std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+                .map(|dir| dir.join(&name))
+                .collect();
+            let mut selected = None;
+            for candidate in candidates {
+                if candidate.is_file() && !crate::managed::is_shim(&candidate)? {
+                    selected = Some(candidate);
+                    break;
+                }
+            }
+            selected.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    "real gh not found; install GitHub CLI or set GHD_GH_PATH",
+                    "real gh not found; install GitHub CLI, select managed gh, or set GHD_GH_PATH",
                 )
-            })?,
+            })?
+        }
     };
+    if crate::managed::is_shim(&path)? {
+        return Err(io::Error::other(
+            "real gh resolves to an agent shim; select the system executable",
+        ));
+    }
     if path.canonicalize()? == std::env::current_exe()?.canonicalize()? {
         return Err(io::Error::other(
             "gh resolves to ghd; set GHD_GH_PATH to the real GitHub CLI",

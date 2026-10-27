@@ -32,7 +32,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGETS = ["src", "tests", "ci", "action", "ci.py", "lint", "test", "install"]
+TARGETS = [
+    "agent-plugin",
+    "src",
+    "tests",
+    "ci",
+    "action",
+    "ci.py",
+    "lint",
+    "test",
+    "install",
+]
 
 # Bump deliberately when you want to adopt a newer ruff. Don't loosen
 # this to a range — see the docstring.

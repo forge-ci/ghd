@@ -21,5 +21,5 @@ httpdate = { workspace = true }
 anyhow = { workspace = true }
 ghd-platform = { path = "../ghd-platform" }
 prost = { workspace = true }
-kernal-api = { workspace = true }
+kernal-api = { workspace = true, features = ["hash-sha256"] }
 graphql-parser = { workspace = true }

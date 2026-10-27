@@ -488,3 +488,50 @@ and refused records, infers no relation between different opaque keys, and
 labels its fixed-TTL/completion-order assumptions and omitted write/origin
 policy. Unknown dispatch rows keep observed totals null and point savings
 remain unknown. This is a bounded scenario tool, not a provider-budget proof.
+
+## Explicit tool bootstrap and resolver custody
+
+The agent plugin's standalone Python bootstrap consumes an explicit local
+archive or HTTPS artifact, a version, a trusted SHA256 and an exact member. It
+verifies the complete bounded archive before extracting one regular file,
+rejects insecure redirect schemes and uses no latest-release discovery. The
+ghd binary comes from the wheel's existing raw script; no wheel is rewritten
+or locally compiled. A safe `--help` capability probe rejects old publishers
+before an unknown `tools` command could enter native passthrough/write fencing.
+
+`ghd-core::managed` reuses the existing private directory custody helper. The
+native publisher checks extracted binary SHA256, stages privately, probes the
+expected tool/version with bounded execution and publishes an immutable
+BLAKE3-named object before its active JSON record. Kernel SHA256 is enabled
+through the existing facade feature; no implementation crate is called by ghd.
+Existing object bytes must agree. Interrupted private-publication/tool stages
+fail closed, and obsolete owned objects are cleared before another version.
+Cleanup failures are explicit, including Windows consumers holding an older
+executable; a newly published record can already be active in that case.
+Uninstall preserves coordination locks, unrelated names and the other tool kind.
+
+The canonical compatibility resolver keeps explicit `GHD_GH_PATH` precedence,
+then accepts opt-in `GHD_MANAGED_GH_DIR`, otherwise searches system PATH while
+skipping known agent-shim markers. Selected managed records/bodies are bounded
+and owner-private and must match BLAKE3. Runtime wrappers delegate validation/execution to a separately trusted native
+publisher outside the managed root; they never execute from a self-asserted
+Python-read checksum record. Corruption never triggers a download or fallback to a
+different gh identity. Existing backend stamps scope cache entries to the
+selected program. Auth fallback uses the same resolver; direct HTTP paths
+retain their existing credential/native boundary.
+
+Optional launcher generation uses Python templates and native private
+materialization in a separately trusted directory outside the managed root.
+Only new or explicitly owned launcher directories are accepted; templates and
+existing owned files are validated before replacement, and each file publishes
+atomically. The private bootstrap payload accompanies the generated launchers.
+Explicit launcher removal preserves marker/lock custody and unrelated files.
+No tracked shell file or GEN-005 exception is added.
+
+Unix and CMD wrappers wait for the native child with original streams and
+arguments. Publication/status/uninstall use the native publisher rather than
+a Python platform selector. A separately trusted publisher remains outside the managed root for runtime
+and maintenance, avoiding deletion of its own Windows image. The delegate pins
+GHD_EXE to the verified managed object even with no system ghd on PATH. Plugin installation does not activate hooks,
+services or global settings. Distribution metadata and release publication
+are distinct from this explicit verified local bootstrap.

@@ -167,6 +167,10 @@ if hold.exists():
             raise SystemExit(1)
         time.sleep(0.01)
 kind, action = args[:2]
+if kind == "auth" and action == "fixture-exit":
+    print(json.dumps(args))
+    print("fixture delegated error", file=sys.stderr)
+    raise SystemExit(23)
 if action == "edit":
     raise SystemExit(0)
 if kind not in ("issue", "pr", "run") or action not in ("view", "list", "checks"):
@@ -295,6 +299,9 @@ def _resource_cli(
             start_fixture_daemon(binary, env, tmp_path, state)
         )
 
+        # Cold delegated launches need an explicit cleanup budget; the other
+        # capture/context knobs remain at this single test-owned boundary.
+        # pylint: disable-next=too-many-arguments
         def invoke(
             *args: str,
             direct: bool = False,
@@ -302,6 +309,7 @@ def _resource_cli(
             python_code: str | None = None,
             context: dict[str, str | None] | None = None,
             daemon_action: Literal["restart", "stop"] | None = None,
+            timeout: float = 15,
         ) -> subprocess.CompletedProcess[str]:
             nonlocal daemon
             if daemon_action == "stop":
@@ -331,7 +339,7 @@ def _resource_cli(
                 cwd=tmp_path,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=timeout,
                 check=False,
             )
 
