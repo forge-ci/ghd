@@ -90,18 +90,56 @@ pub fn spec(request: &GhReadRequest, host: &str, token: &str, args: &[String]) -
         .env("GH_NO_EXTENSION_UPDATE_NOTIFIER", "1")
 }
 
+#[cfg(test)]
 pub async fn execute(
     spec: SpawnSpec,
     permit: kernal_api::async_engine::SemaphorePermit,
 ) -> io::Result<GhReadResponse> {
+    run(spec, permit, None, false).await
+}
+
+pub(crate) async fn governed(
+    spec: SpawnSpec,
+    permit: kernal_api::async_engine::SemaphorePermit,
+    dispatch: crate::governance::Dispatch,
+    included_headers: bool,
+) -> io::Result<GhReadResponse> {
+    run(spec, permit, Some(dispatch), included_headers).await
+}
+
+async fn run(
+    spec: SpawnSpec,
+    permit: kernal_api::async_engine::SemaphorePermit,
+    mut dispatch: Option<crate::governance::Dispatch>,
+    included_headers: bool,
+) -> io::Result<GhReadResponse> {
     let output = kernal_api::async_engine::launch_blocking(move || {
-        // A canceled HTTP caller must not release capacity while its child lives.
+        // Both process and governor capacity belong to the child until reaped.
         let _permit = permit;
-        kernal_api::run_bounded_command(spec, Duration::from_secs(60), 32 * 1024 * 1024)
+        if let Some(dispatch) = &mut dispatch {
+            dispatch.start();
+        }
+        let output =
+            kernal_api::run_bounded_command(spec, Duration::from_secs(60), 32 * 1024 * 1024)
+                .map_err(io::Error::other)?;
+        if let Some(dispatch) = dispatch {
+            if included_headers
+                && let Ok((status, _, body)) =
+                    crate::run_collection::included_response(&output.stdout)
+            {
+                let headers =
+                    std::str::from_utf8(&output.stdout[..output.stdout.len() - body.len()])
+                        .map_err(io::Error::other)?;
+                dispatch.complete(status, headers, body)?;
+            } else {
+                // Opaque porcelain exposes no provider headers or point cost.
+                dispatch.complete(0, "", &[])?;
+            }
+        }
+        Ok::<_, io::Error>(output)
     })
     .await
-    .map_err(io::Error::other)?
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::other)??;
     let exit_code = crate::platform::process::bounded_exit_code(output.exit.raw_code())?;
     Ok(GhReadResponse {
         stdout: output.stdout,
@@ -141,52 +179,74 @@ mod tests {
             .build()
             .expect("runtime");
         runtime.run(async {
-            let directory = std::env::temp_dir().join(format!(
-                "ghd-capacity-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("clock")
-                    .as_nanos()
-            ));
-            std::fs::create_dir(&directory).expect("new directory");
-            let capacity = Semaphore::new(1);
-            let permit = capacity.acquire().await;
-            let spec = SpawnSpec::new(std::env::current_exe().expect("test binary"))
-                .args([
-                    "--exact",
-                    "gh_executor::tests::capacity_fixture_child",
-                    "--nocapture",
-                ])
-                .env("GHD_CAPACITY_FIXTURE", &directory)
-                .stdin(StreamMode::Null);
-            let pending = async_engine::launch(execute(spec, permit));
-            let started = async_engine::timeout(Duration::from_secs(5), async {
-                while !directory.join("started").exists() {
-                    async_engine::sleep(Duration::from_millis(5)).await;
+            for with_governor in [false, true] {
+                let directory = std::env::temp_dir().join(format!(
+                    "ghd-capacity-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("clock")
+                        .as_nanos()
+                ));
+                std::fs::create_dir(&directory).expect("new directory");
+                let capacity = Semaphore::new(1);
+                let permit = capacity.acquire().await;
+                let spec = SpawnSpec::new(std::env::current_exe().expect("test binary"))
+                    .args([
+                        "--exact",
+                        "gh_executor::tests::capacity_fixture_child",
+                        "--nocapture",
+                    ])
+                    .env("GHD_CAPACITY_FIXTURE", &directory)
+                    .stdin(StreamMode::Null);
+                let control = crate::governance::Control::at(
+                    directory.join("governor"),
+                    "capacity-fixture".into(),
+                    0,
+                );
+                let pending = if with_governor {
+                    let dispatch = control
+                        .enter("unknown", false, false, crate::governance::Event::Process)
+                        .await
+                        .expect("governor permit");
+                    async_engine::launch(governed(spec, permit, dispatch, false))
+                } else {
+                    async_engine::launch(execute(spec, permit))
+                };
+                let started = async_engine::timeout(Duration::from_secs(5), async {
+                    while !directory.join("started").exists() {
+                        async_engine::sleep(Duration::from_millis(5)).await;
+                    }
+                })
+                .await;
+                if started.is_err() {
+                    std::fs::write(directory.join("release"), b"release")
+                        .expect("release slow child");
                 }
-            })
-            .await;
-            if started.is_err() {
-                std::fs::write(directory.join("release"), b"release").expect("release slow child");
+                started.expect("child running");
+                pending.cancel();
+                let _ = pending.await;
+                let prematurely_available =
+                    async_engine::timeout(Duration::from_millis(50), capacity.acquire()).await;
+                let retained = prematurely_available.is_err();
+                let governor_retained = !with_governor || control.available_for_test() == (3, 2);
+                drop(prematurely_available);
+                std::fs::write(directory.join("release"), b"release").expect("release child");
+                let permit = async_engine::timeout(Duration::from_secs(5), capacity.acquire())
+                    .await
+                    .expect("child reaped");
+                drop(permit);
+                let governor_released = !with_governor || control.available_for_test() == (4, 3);
+                std::fs::remove_dir_all(directory).expect("clean fixture");
+                assert!(
+                    retained,
+                    "cancellation must not release a live child's permit"
+                );
+                assert!(
+                    governor_retained && governor_released,
+                    "governor capacity belongs to the child until reaped"
+                );
             }
-            started.expect("child running");
-            pending.cancel();
-            let _ = pending.await;
-            let prematurely_available =
-                async_engine::timeout(Duration::from_millis(50), capacity.acquire()).await;
-            let retained = prematurely_available.is_err();
-            drop(prematurely_available);
-            std::fs::write(directory.join("release"), b"release").expect("release child");
-            let permit = async_engine::timeout(Duration::from_secs(5), capacity.acquire())
-                .await
-                .expect("child reaped");
-            drop(permit);
-            std::fs::remove_dir_all(directory).expect("clean fixture");
-            assert!(
-                retained,
-                "cancellation must not release a live child's permit"
-            );
         });
     }
 }

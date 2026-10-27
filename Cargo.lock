@@ -392,6 +392,7 @@ dependencies = [
  "anyhow",
  "ghd-platform",
  "graphql-parser",
+ "httpdate",
  "kernal-api",
  "prost",
 ]

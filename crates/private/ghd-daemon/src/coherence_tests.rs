@@ -48,6 +48,13 @@ async fn mock_upstream(
         let started = Arc::clone(&handler_started);
         let release = Arc::clone(&handler_release);
         async move {
+            if String::from_utf8_lossy(request.body()).contains("rate_limited_fixture") {
+                return Response::new(200, br#"{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}"#.to_vec())
+                    .and_then(|response| response.with_header("x-ratelimit-resource", "graphql"))
+                    .and_then(|response| response.with_header("x-ratelimit-remaining", "0"))
+                    .and_then(|response| response.with_header("x-ratelimit-reset", "4102444800"))
+                    .expect("rate response");
+            }
             let mutation = String::from_utf8_lossy(request.body()).contains("mutation");
             let before = version.load(Ordering::Relaxed);
             if mutation {
@@ -82,6 +89,8 @@ impl Harness {
             Identity::from_token("github.com", "fixture-coherence".into()).expect("identity");
         let mut state = new_state(&identity, "session".into()).expect("state");
         state.journal = Journal::at(directory.clone());
+        state.control =
+            crate::governance::Control::at(directory.join("governor"), identity.key().into(), 0);
         if disk {
             state.disk = Some(Arc::new(ghd_core::durable::Store::new(
                 directory.join("cache"),
@@ -93,6 +102,7 @@ impl Harness {
         }
         state.fresh_for = Duration::MAX;
         let upstream = Arc::get_mut(&mut state.upstream).expect("unshared");
+        upstream.set_control_for_test(Arc::clone(&state.control));
         if disabled {
             upstream.disable_network_for_test();
         } else {
@@ -264,5 +274,40 @@ fn canceled_restart_validation_leaves_no_uncharged_indexed_body() {
         );
         assert!(harness.state.retained.lock().await.usage().1 < 4096);
         harness.release.notify_one();
+    });
+}
+
+#[test]
+fn http_200_graphql_rate_error_blocks_other_calls_before_write_intent() {
+    let runtime = RuntimeBuilder::multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.run(async {
+        let harness = Harness::start(false).await;
+        let (status, limited) =
+            request(harness.port, &harness.key, "{ rate_limited_fixture }").await;
+        assert_eq!(status, 200);
+        assert!(limited.error.contains("rate limit"));
+        let (status, denied) = request(harness.port, &harness.key, "mutation { write }").await;
+        assert_eq!(status, 429);
+        assert!(denied.error.contains("cooldown"));
+        assert_eq!(
+            harness
+                .state
+                .journal
+                .epoch()
+                .expect("no refused write intent"),
+            0
+        );
+        assert_eq!(
+            harness
+                .state
+                .upstream
+                .counters
+                .graphql_passthrough
+                .load(Ordering::Relaxed),
+            1
+        );
     });
 }

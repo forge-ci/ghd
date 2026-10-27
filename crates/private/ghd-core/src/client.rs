@@ -50,6 +50,23 @@ fn send(
     send_connected(stream, identity, ep, method, path, body)
 }
 
+pub fn caller_key() -> io::Result<String> {
+    let value = match std::env::var("GHD_CALLER_ID") {
+        Ok(value) if value.len() <= 256 => value.into_bytes(),
+        Err(std::env::VarError::NotPresent) => std::env::current_dir()?
+            .as_os_str()
+            .as_encoded_bytes()
+            .to_vec(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GHD_CALLER_ID must contain at most 256 UTF-8 bytes",
+            ));
+        }
+    };
+    Ok(kernal_api::hash::blake3_bytes(&value).to_hex())
+}
+
 fn send_connected(
     mut stream: TcpStream,
     identity: &Identity,
@@ -61,10 +78,11 @@ fn send_connected(
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\nX-Ghd-Caller: {}\r\n\
          Content-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         ep.token,
         identity.key(),
+        caller_key()?,
         body.len()
     );
     stream.write_all(head.as_bytes())?;

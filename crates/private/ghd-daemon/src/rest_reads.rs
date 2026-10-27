@@ -39,12 +39,7 @@ pub struct Counters {
     budgets: std::sync::Mutex<BTreeMap<String, Value>>,
 }
 
-fn header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
-    headers
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then(|| value.trim()))
-}
+use ghd_core::governor::header;
 
 impl Counters {
     fn observe(&self, headers: &str) -> io::Result<()> {
@@ -350,6 +345,17 @@ async fn fetch(
     {
         args.extend(["--header".into(), format!("If-None-Match: {etag}")]);
     }
+    let category =
+        ghd_core::governor::rest_category(rest.fetch_args.get(1).map_or("", String::as_str));
+    let dispatch = state
+        .control
+        .enter(
+            category,
+            rest.force_refresh || rest.rate_limit,
+            rest.rate_limit,
+            crate::governance::Event::Process,
+        )
+        .await?;
     let permit = state.gh_permits.acquire().await;
     state
         .rest_counters
@@ -361,9 +367,11 @@ async fn fetch(
             .introspections
             .fetch_add(1, Ordering::Relaxed);
     }
-    let result = gh_executor::execute(
+    let result = gh_executor::governed(
         gh_executor::spec(request, &state.host, &state.github_token, &args),
         permit,
+        dispatch,
+        true,
     )
     .await;
     if result.is_err() {

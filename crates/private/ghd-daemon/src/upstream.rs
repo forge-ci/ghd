@@ -31,6 +31,7 @@ pub struct Counters {
 
 pub struct Upstream {
     http: http::Client,
+    control: Arc<crate::governance::Control>,
     auth: String,
     api: String,
     graphql_url: String,
@@ -48,9 +49,14 @@ struct Batch {
 }
 
 impl Upstream {
-    pub fn new(identity: &ghd_core::identity::Identity, window: Duration) -> io::Result<Self> {
+    pub(crate) fn new(
+        identity: &ghd_core::identity::Identity,
+        window: Duration,
+        control: Arc<crate::governance::Control>,
+    ) -> io::Result<Self> {
         let limits = http::Limits {
             max_body_bytes: 32 * 1024 * 1024,
+            total_timeout: Duration::from_secs(60),
             // Renamed/transferred repos answer 301; the hop stays on
             // the same API origin, so the Authorization header is kept.
             max_redirects: 3,
@@ -58,6 +64,7 @@ impl Upstream {
         };
         Ok(Self {
             http: http::Client::new(limits)?,
+            control,
             auth: format!("Bearer {}", identity.token()),
             api: identity.api_base(),
             graphql_url: identity.graphql_url(),
@@ -69,6 +76,11 @@ impl Upstream {
     }
 
     /// Cache tests must fail locally on an unexpected miss, never contact GitHub.
+    #[cfg(test)]
+    pub(crate) fn set_control_for_test(&mut self, control: Arc<crate::governance::Control>) {
+        self.control = control;
+    }
+
     #[cfg(test)]
     pub(crate) fn disable_network_for_test(&mut self) {
         self.set_endpoint_for_test("http://127.0.0.1:0");
@@ -95,6 +107,11 @@ impl Upstream {
         if let Some(tag) = etag {
             headers.push(("If-None-Match", tag));
         }
+        let mut dispatch = self
+            .control
+            .enter("core", false, false, crate::governance::Event::Http)
+            .await?;
+        dispatch.start();
         let response = self
             .http
             .execute(Request {
@@ -111,13 +128,10 @@ impl Upstream {
         {
             self.counters.core_remaining.store(left, Ordering::Relaxed);
         }
-        let headers = ["cache-control", "age", "vary"]
-            .into_iter()
-            .filter_map(|name| header_str(&response, name).map(|value| format!("{name}: {value}")))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let headers = provider_headers(&response);
         let policy = crate::rest_reads::policy(&headers, Duration::MAX);
-        response.into_bytes().await?;
+        let bytes = response.into_bytes().await?;
+        crate::governance::complete(dispatch, status, headers, bytes.to_vec()).await?;
         match status {
             304 => self.counters.sentinel_304.fetch_add(1, Ordering::Relaxed),
             _ => self.counters.sentinel_200.fetch_add(1, Ordering::Relaxed),
@@ -158,10 +172,13 @@ impl Upstream {
                 prs.insert(number, fields.clone());
                 batches.insert(key.clone(), Batch { prs, done });
                 let this = Arc::clone(self);
+                let caller = crate::governance::caller();
                 async_engine::launch(async move {
                     // Cancellation of every subscriber cannot free a live batch's capacity.
                     let _capacity = capacity;
-                    this.flush(key).await;
+                    crate::governance::CALLER
+                        .scope(caller, this.flush(key))
+                        .await;
                 })
                 .detach();
                 receiver
@@ -201,6 +218,20 @@ impl Upstream {
 
     /// Send a caller's `/graphql` body as-is; `(status, response body)`.
     pub async fn graphql_raw(&self, body: &[u8]) -> Result<(u16, Vec<u8>), String> {
+        let dispatch = self
+            .control
+            .enter("graphql", false, false, crate::governance::Event::Http)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.graphql_dispatched(body, dispatch).await
+    }
+
+    pub(crate) async fn graphql_dispatched(
+        &self,
+        body: &[u8],
+        mut dispatch: crate::governance::Dispatch,
+    ) -> Result<(u16, Vec<u8>), String> {
+        dispatch.start();
         let url = self.graphql_url.clone();
         let headers = [
             ("Authorization", self.auth.as_str()),
@@ -225,7 +256,11 @@ impl Upstream {
                 .graphql_remaining
                 .store(left, Ordering::Relaxed);
         }
+        let observed = provider_headers(&response);
         let bytes = response.into_bytes().await.map_err(|e| e.to_string())?;
+        let bytes = crate::governance::complete(dispatch, status, observed, bytes.to_vec())
+            .await
+            .map_err(|e| e.to_string())?;
         self.counters
             .graphql_passthrough
             .fetch_add(1, Ordering::Relaxed);
@@ -242,6 +277,12 @@ impl Upstream {
             ("User-Agent", USER_AGENT),
             ("Content-Type", "application/json"),
         ];
+        let mut dispatch = self
+            .control
+            .enter("graphql", false, false, crate::governance::Event::Http)
+            .await
+            .map_err(|error| error.to_string())?;
+        dispatch.start();
         let response = self
             .http
             .execute(Request {
@@ -253,7 +294,11 @@ impl Upstream {
             .await
             .map_err(|e| e.to_string())?;
         let status = response.status();
+        let observed = provider_headers(&response);
         let bytes = response.into_bytes().await.map_err(|e| e.to_string())?;
+        let bytes = crate::governance::complete(dispatch, status, observed, bytes.to_vec())
+            .await
+            .map_err(|e| e.to_string())?;
         let value = json::parse(&bytes).map_err(|e| format!("graphql HTTP {status}: {e}"))?;
         let Value::Object(mut top) = value else {
             return Err(format!("graphql HTTP {status}: not an object"));
@@ -327,6 +372,23 @@ fn as_i64(value: &Value) -> Option<i64> {
     }
 }
 
+fn provider_headers(response: &http::Response) -> String {
+    [
+        "cache-control",
+        "age",
+        "vary",
+        "x-ratelimit-resource",
+        "x-ratelimit-remaining",
+        "x-ratelimit-limit",
+        "x-ratelimit-reset",
+        "retry-after",
+    ]
+    .into_iter()
+    .filter_map(|name| header_str(response, name).map(|value| format!("{name}: {value}")))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 fn header_str(response: &http::Response, name: &str) -> Option<String> {
     response
         .header(name)
@@ -377,7 +439,14 @@ mod tests {
             let identity =
                 ghd_core::identity::Identity::from_token("github.com", "batch-fixture".into())
                     .expect("identity");
-            let upstream = Arc::new(Upstream::new(&identity, Duration::ZERO).expect("upstream"));
+            let upstream = Arc::new(
+                Upstream::new(
+                    &identity,
+                    Duration::ZERO,
+                    crate::governance::Control::new(&identity).expect("control"),
+                )
+                .expect("upstream"),
+            );
             let (done, receiver) = async_engine::broadcast_channel(1).expect("channel");
             drop(receiver); // An abandoned waiting caller must not relax the cap.
             upstream.batches.lock().await.insert(

@@ -52,14 +52,17 @@ fn invalid(message: &str) -> io::Error {
 }
 
 /// Shared process-bound private-state custody. Interrupted stages fail closed.
-pub(crate) fn lock_directory(directory: &std::path::Path) -> io::Result<File> {
+pub(crate) fn lock_directory(directory: &std::path::Path) -> io::Result<(File, bool)> {
     platform::fs::create_private_dir(directory)?;
     let path = directory.join("lock");
-    match platform::fs::create_private_file(&path) {
-        Ok(file) => drop(file),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+    let created = match platform::fs::create_private_file(&path) {
+        Ok(file) => {
+            drop(file);
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
         Err(error) => return Err(error),
-    }
+    };
     let lock = OpenOptions::new().read(true).write(true).open(&path)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
@@ -84,7 +87,7 @@ pub(crate) fn lock_directory(directory: &std::path::Path) -> io::Result<File> {
                         return Err(invalid("interrupted cache publication requires recovery"));
                     }
                 }
-                return Ok(lock);
+                return Ok((lock, created));
             }
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -118,7 +121,7 @@ impl Store {
     }
 
     fn lock(&self) -> io::Result<File> {
-        lock_directory(&self.directory)
+        lock_directory(&self.directory).map(|(lock, _)| lock)
     }
 
     fn load(&self, epoch: u64) -> io::Result<Cache<Vec<u8>>> {

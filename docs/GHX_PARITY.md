@@ -22,7 +22,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #9 | Expanded resource and collection reads | Implemented and verified; draft PR #18 |
 | #10 | General REST cache and revalidation | Implemented and locally verified; draft PR #18 |
 | #11 | Bounded durable cache and restart invalidation | Implemented and locally verified; draft PR #18 |
-| #12 | Shared rate governor and cooldown | Pending |
+| #12 | Shared rate governor and cooldown | Implemented and locally verified; draft PR #18 |
 | #13 | Repository snapshots and authority freshness | Pending |
 | #14 | Daemon/cache operations and configuration | Pending |
 | #15 | Diagnostics, dashboard and replay | Pending |
@@ -294,3 +294,27 @@ tests, backend wheel smoke and action gates. Retained RED evidence covers the
 two capacity cases and five policy cases. Read-only clud-review is clean;
 contract precheck reports zero violations and the same 17 local-only review
 items. Native validation of the new persistence head follows this push.
+
+
+## Shared daemon budget and cooldown (#12)
+
+Core policy uses an explicit clock, while private governor reservations/cooldown survive restart
+independently of optional body snapshots. Fresh hits bypass dispatch, essential
+work has protected capacity, and authoritative refusal never hides an old body.
+Provider measurements and minimum dispatch estimates remain distinct. Caller
+digests do not change cache identity or claim per-caller enforcement.
+
+The #11 head bc33709 passed [hosted run40493348359](https://github.com/forge-ci/ghd/actions/runs/40493348359),
+including native Windows/macOS x64/ARM64 persistence/cancellation Rust tests and
+selected installed smoke checks. Its fast Python unit lane ran 132 cases and
+its selected native integration lane ran four marked smoke cases. The separate
+coverage correction now selects the complete installed-test directory on native
+integration lanes while retaining those ordinary fast tests. That expanded
+native validation will run with the next feature push.
+
+
+The final #12 batch passes `./ci.py all`: all Rust suites, 144 installed Python
+tests, backend wheel smoke and action gates. The focused reserve-floor RED is
+retained. Read-only clud-review is clean after fixing its record-domain finding;
+a valid cache envelope cannot decode as default governor policy. Contract
+precheck reports zero violations and the same 17 local-only review items.

@@ -66,6 +66,7 @@ pub(crate) struct State {
     identity_key: String,
     pub(crate) host: String,
     upstream: Arc<Upstream>,
+    pub(crate) control: Arc<crate::governance::Control>,
     pub(crate) policy: ghd_core::cache_policy::Policy,
     pub(crate) disk: Option<Arc<ghd_core::durable::Store>>,
     pub(crate) retained: crate::retention::Cache,
@@ -89,6 +90,7 @@ pub(crate) fn new_state(
 ) -> io::Result<State> {
     let journal = ghd_core::coherence::Journal::global()?;
     let policy = ghd_core::cache_policy::Policy::from_environment()?;
+    let control = crate::governance::Control::new(identity)?;
     let disk = crate::persistence::open(identity, journal.clone())?;
     Ok(State {
         disk,
@@ -96,7 +98,8 @@ pub(crate) fn new_state(
         token,
         identity_key: identity.key().to_string(),
         host: identity.host().to_string(),
-        upstream: Arc::new(Upstream::new(identity, BATCH_WINDOW)?),
+        upstream: Arc::new(Upstream::new(identity, BATCH_WINDOW, Arc::clone(&control))?),
+        control,
         retained: crate::retention::new()?,
         read_permits: kernal_api::async_engine::Semaphore::new(32),
         graphql_fresh: AtomicU64::new(0),
@@ -177,14 +180,29 @@ async fn route(state: &State, request: Request) -> Response {
     if !authorized || !same_identity {
         return text(401, "unauthorized");
     }
-    match (request.method(), request.path()) {
-        ("GET", "/v1/health") => text(200, "ok"),
-        ("GET", "/v1/stats") => stats(state).await,
-        ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
-        ("POST", "/v1/graphql") => graphql(state, request.body()).await,
-        ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
-        _ => text(404, "no such route"),
-    }
+    let caller = match request.header("x-ghd-caller") {
+        Some(value) if value.len() <= 256 => kernal_api::hash::blake3_bytes(value).to_hex(),
+        Some(_) => return text(400, "caller metadata exceeds limit"),
+        None => "anonymous".into(),
+    };
+    crate::governance::CALLER
+        .scope(caller, async {
+            if request.method() == "POST" {
+                state.control.event(
+                    &crate::governance::caller(),
+                    crate::governance::Event::Request,
+                );
+            }
+            match (request.method(), request.path()) {
+                ("GET", "/v1/health") => text(200, "ok"),
+                ("GET", "/v1/stats") => stats(state).await,
+                ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
+                ("POST", "/v1/graphql") => graphql(state, request.body()).await,
+                ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
+                _ => text(404, "no such route"),
+            }
+        })
+        .await
 }
 
 fn text(status: u16, body: &str) -> Response {
@@ -276,6 +294,7 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
     *retained = entry;
     match result {
         Ok((fields, source)) => {
+            state.control.answer(source);
             let doc: BTreeMap<String, Value> = wanted
                 .iter()
                 .filter_map(|f| fields.get(f).map(|v| (f.clone(), v.clone())))
@@ -401,7 +420,8 @@ fn graphql_reply(status: u16, message: &GraphqlResponse) -> Response {
         .unwrap_or_default()
 }
 
-fn graphql_answer(json: Vec<u8>, source: &str) -> Response {
+fn graphql_answer(state: &State, json: Vec<u8>, source: &str) -> Response {
+    state.control.answer(source);
     let error = gql::errors(&json).unwrap_or_default();
     graphql_reply(
         200,
@@ -413,7 +433,7 @@ fn graphql_answer(json: Vec<u8>, source: &str) -> Response {
     )
 }
 
-fn graphql_http_answer(status: u16, json: Vec<u8>, source: &str) -> Response {
+fn graphql_http_answer(state: &State, status: u16, json: Vec<u8>, source: &str) -> Response {
     if status >= 400 {
         return graphql_reply(
             200,
@@ -424,64 +444,86 @@ fn graphql_http_answer(status: u16, json: Vec<u8>, source: &str) -> Response {
             },
         );
     }
-    graphql_answer(json, source)
+    graphql_answer(state, json, source)
+}
+
+fn graphql_failed(status: u16, error: String) -> Response {
+    graphql_reply(
+        status,
+        &GraphqlResponse {
+            error,
+            ..Default::default()
+        },
+    )
+}
+
+async fn graphql_write(state: &State, upstream_body: &[u8]) -> Response {
+    let dispatch = match state
+        .control
+        .enter("graphql", true, false, crate::governance::Event::Http)
+        .await
+    {
+        Ok(dispatch) => dispatch,
+        Err(error) => return graphql_failed(429, error.to_string()),
+    };
+    let intent = match state.journal.begin() {
+        Ok(intent) => intent,
+        Err(error) => {
+            if let Err(cleanup) = crate::governance::cancel(dispatch).await {
+                return graphql_failed(409, format!("{error}; governor cleanup: {cleanup}"));
+            }
+            return graphql_failed(409, error.to_string());
+        }
+    };
+    state.retained.lock().await.clear();
+    match state
+        .upstream
+        .graphql_dispatched(upstream_body, dispatch)
+        .await
+    {
+        Ok((status, json)) => {
+            if status < 500
+                && let Err(error) = intent.finish()
+            {
+                return graphql_failed(500, error.to_string());
+            }
+            graphql_http_answer(state, status, json, "fetched")
+        }
+        // Keep the intent when upstream completion is uncertain.
+        Err(error) => graphql_failed(502, error),
+    }
 }
 
 async fn graphql(state: &State, body: &[u8]) -> Response {
-    let failed = |status, error: String| {
-        graphql_reply(
-            status,
-            &GraphqlResponse {
-                error,
-                ..Default::default()
-            },
-        )
-    };
     let Ok(req) = GraphqlRequest::decode(body) else {
-        return failed(400, "malformed request".into());
+        return graphql_failed(400, "malformed request".into());
     };
     if !req.hostname.is_empty()
         && !ghd_core::identity::hostname(&req.hostname).is_ok_and(|host| host == state.host)
     {
-        return failed(400, "request host does not match daemon identity".into());
+        return graphql_failed(400, "request host does not match daemon identity".into());
     }
     let upstream_body = match gql::body_operation(&req.query, &req.variables, &req.operation_name) {
         Ok(b) => b,
-        Err(e) => return failed(400, e),
+        Err(e) => return graphql_failed(400, e),
     };
     let operation = match gql::classify(
         &req.query,
         (!req.operation_name.is_empty()).then_some(req.operation_name.as_str()),
     ) {
         Ok(operation) => operation,
-        Err(error) => return failed(400, error.to_string()),
+        Err(error) => return graphql_failed(400, error.to_string()),
     };
     if operation == gql::Operation::Write {
-        let intent = match state.journal.begin() {
-            Ok(intent) => intent,
-            Err(error) => return failed(409, error.to_string()),
-        };
-        state.retained.lock().await.clear();
-        return match state.upstream.graphql_raw(&upstream_body).await {
-            Ok((status, json)) => {
-                if status < 500
-                    && let Err(error) = intent.finish()
-                {
-                    return failed(500, error.to_string());
-                }
-                graphql_http_answer(status, json, "fetched")
-            }
-            // Keep the intent when upstream completion is uncertain.
-            Err(error) => failed(502, error),
-        };
+        return graphql_write(state, &upstream_body).await;
     }
     let epoch = match read_epoch(state).await {
         Ok(epoch) => epoch,
-        Err(error) => return failed(409, error.to_string()),
+        Err(error) => return graphql_failed(409, error.to_string()),
     };
     let _admission = match crate::retention::admit(state).await {
         Ok(permit) => permit,
-        Err(error) => return failed(429, error.to_string()),
+        Err(error) => return graphql_failed(429, error.to_string()),
     };
     let key = crate::retention::key("graphql", &upstream_body);
     let slot = crate::retention::graphql(state, &key).await;
@@ -492,14 +534,14 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     {
         state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
         return match state.journal.confirm(epoch) {
-            Ok(()) => graphql_answer(json.clone(), "fresh"),
-            Err(error) => failed(409, error.to_string()),
+            Ok(()) => graphql_answer(state, json.clone(), "fresh"),
+            Err(error) => graphql_failed(409, error.to_string()),
         };
     }
     match state.upstream.graphql_raw(&upstream_body).await {
         Ok((status, json)) => {
             if let Err(error) = state.journal.confirm(epoch) {
-                return failed(409, error.to_string());
+                return graphql_failed(409, error.to_string());
             }
             // Only a clean answer is reused; errors (rate limits) are not.
             if status == 200
@@ -514,9 +556,9 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
             {
                 *entry = Some((json.clone(), Instant::now()));
             }
-            graphql_http_answer(status, json, "fetched")
+            graphql_http_answer(state, status, json, "fetched")
         }
-        Err(e) => failed(502, e),
+        Err(e) => graphql_failed(502, e),
     }
 }
 
@@ -548,6 +590,12 @@ async fn stats(state: &State) -> Response {
         "core_remaining".into(),
         Value::Signed(c.core_remaining.load(Ordering::Relaxed)),
     );
+    match state.control.stats() {
+        Ok(value) => {
+            doc.insert("governor".into(), value);
+        }
+        Err(error) => return text(500, &error.to_string()),
+    }
     if let Err(error) = state.rest_counters.add_stats(&mut doc) {
         return text(500, &error.to_string());
     }

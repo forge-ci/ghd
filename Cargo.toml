@@ -19,6 +19,7 @@ repository = "https://github.com/forge-ci/ghd"
 homepage = "https://github.com/forge-ci/ghd"
 
 [workspace.dependencies]
+httpdate = "=1.0.3"
 graphql-parser = { version = "=0.4.1", default-features = false }
 anyhow = "1"
 # Exact pins (obs-rust #2056 convention): behaviour cannot drift under a

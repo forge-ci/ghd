@@ -144,3 +144,17 @@ references removed concepts is worse than no procedure.
   completed-run projections restricted to stable fields and an explicit attempt.
   Mutable metadata retains its ordinary policy. Disk capacity is separate from
   the memory budget; origin no-store/no-cache/max-age still apply.
+
+
+## ghx parity: shared budget and durable cooldown (#12)
+
+- Govern daemon-managed operations with a shared four-slot identity pool,
+  three routine slots and a configurable observed-budget reserve.
+- Honor provider cooldowns, retry/reset hints and HTTP-200 GraphQL rate errors;
+  distinguish authorization denial and preserve explicit authority refusal.
+- Persist bounded private reservations/cooldown independently of response-cache
+  settings, including canceled callers and overlapping operations.
+- Attribute cache hits, dispatches, refusals and 304s to hashed caller metadata
+  without changing body sharing; retain separate provider and estimate metrics.
+- Run the complete installed cache-test directory on explicitly selected native
+  integration lanes while preserving ordinary fast-lane coverage.

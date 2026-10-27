@@ -171,6 +171,41 @@ Mutable metadata such as `workflowName` keeps the ordinary command TTL, even
 when sharing the same body. Observed origin cache policy caps configured TTLs; opaque gh command output
 does not expose HTTP headers.
 
+Daemon-managed upstream operations share four dispatch slots, with at most
+three routine operations so one remains available to essential work.
+`GHD_RATE_RESERVE` (default 0) protects that many estimated remaining units in
+each observed bucket. A known empty bucket still refuses calls at reserve 0.
+Daemon GraphQL writes and REST requests with explicit no-cache policy may use
+a positive reserve; they cannot bypass exhaustion or provider cooldown. Fresh
+cache hits use no dispatch slot. A forced origin read fails explicitly when
+refused and never receives an old body as a fallback.
+
+Cooldown honors 429, rate-limited 403 and GraphQL HTTP-200 rate errors;
+ordinary authorization denials do not trigger it. Retry-After seconds/dates and
+primary reset timestamps take precedence; missing hints use exponential
+backoff from 60 seconds, capped at one hour. Private governor state survives
+restart even when disk body caching is disabled. `rate_limit` remains fresh
+and may bypass budget/cooldown policy while still obeying physical capacity.
+
+Reservations coordinate daemon processes of the same credential identity. Each
+minimum dispatch reservation is an estimate; variable GraphQL costs, hidden gh
+subrequests and external credential users prevent it from being an exact point
+meter. Validated 304s release their unused reservation. Stats keep actual
+provider observations separate from dispatch counts and estimates. The scope
+is daemon-managed HTTP/read routes; interactive and native passthrough streams
+and separately invoked gh processes are not intercepted.
+
+`GHD_CALLER_ID` optionally labels a caller (at most 256 UTF-8 bytes); labels and
+the default working-directory identity are hashed before reporting. Caller
+metadata never splits cached bodies. `ghd stats` reports bounded per-caller
+requests, cache hits, HTTP/gh dispatches, refusals and revalidations since this
+daemon started. Batch dispatches belong to the request that opened the batch.
+There are no per-caller caps or priority queues. Semaphore and custody waits
+are individually bounded; callers receive a busy error and choose whether to
+retry. Canceled native children keep capacity until reaped. Unresolved dispatch
+reservations last at most three minutes, followed by a one-minute conservative
+cooldown measured from that lease deadline; commands are never auto-replayed.
+
 **`ghd api graphql`**
 - Takes gh's `-f` (string) and `-F` (typed, `@file`) fields and prints
   GitHub's body.

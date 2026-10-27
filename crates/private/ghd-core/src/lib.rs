@@ -22,6 +22,8 @@ pub mod compat;
 pub mod durable;
 pub mod endpoint;
 pub mod fields;
+pub mod governor;
+pub mod governor_ledger;
 pub mod graphql;
 pub mod identity;
 pub mod operation;

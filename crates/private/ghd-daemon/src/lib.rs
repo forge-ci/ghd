@@ -13,6 +13,7 @@ pub(crate) use ghd_platform as platform;
 mod gh_executor;
 mod gh_reads;
 mod gh_render;
+mod governance;
 pub mod graphql;
 mod persistence;
 mod rest_reads;

@@ -57,7 +57,10 @@ pub async fn handle(state: &State, body: &[u8]) -> Response {
         Err(error) => return failed(400, error),
     };
     match run(state, &request).await {
-        Ok(response) => reply(200, response),
+        Ok(response) => {
+            state.control.answer(&response.source);
+            reply(200, response)
+        }
         Err(error) => failed(409, error),
     }
 }
@@ -290,9 +293,20 @@ async fn execute(
     request: &GhReadRequest,
     args: &[String],
 ) -> io::Result<GhReadResponse> {
-    gh_executor::execute(
+    let category = if args.first().is_some_and(|arg| arg == "api") {
+        ghd_core::governor::rest_category(args.get(1).map_or("", String::as_str))
+    } else {
+        "unknown"
+    };
+    let dispatch = state
+        .control
+        .enter(category, false, false, crate::governance::Event::Process)
+        .await?;
+    gh_executor::governed(
         gh_executor::spec(request, &state.host, &state.github_token, args),
         state.gh_permits.acquire().await,
+        dispatch,
+        args.first().is_some_and(|arg| arg == "api") && args.iter().any(|arg| arg == "--include"),
     )
     .await
 }

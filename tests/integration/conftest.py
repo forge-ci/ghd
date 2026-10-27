@@ -39,12 +39,28 @@ if args[:2] == ["api", "fixture/body"] or collection:
     if Path(TRACE_PATH).with_name("revalidation-fails").exists():
         print("fixture origin unavailable", file=sys.stderr)
         raise SystemExit(1)
-    conditional = any(word.startswith("If-None-Match:") for word in args)
-    print('HTTP/1.1 304 Not Modified' if conditional else 'HTTP/1.1 200 OK')
+    status_file = Path(TRACE_PATH).with_name("provider-status")
+    status = int(status_file.read_text()) if status_file.exists() else 200
+    conditional = status == 200 and any(word.startswith("If-None-Match:") for word in args)
+    status = 304 if conditional else status
+    print(f'HTTP/1.1 {status} fixture')
+    retry_file = Path(TRACE_PATH).with_name("retry-after")
+    if retry_file.exists():
+        print('Retry-After: ' + retry_file.read_text())
     print('ETag: "portable-v1"')
+    remaining_file = Path(TRACE_PATH).with_name("quota-remaining")
+    remaining = remaining_file.read_text() if remaining_file.exists() else "5000"
+    print('X-RateLimit-Resource: core')
+    print('X-RateLimit-Remaining: ' + remaining)
+    print('X-RateLimit-Limit: 5000')
+    print('X-RateLimit-Reset: 4102444800')
     policy = Path(TRACE_PATH).with_name("collection-policy")
     print('Cache-Control: ' + (policy.read_text() if collection and policy.exists() else 'private, max-age=60'))
     print()
+    if status >= 400:
+        print('{"message":"fixture provider error"}')
+        print(f'fixture provider error (HTTP {status})', file=sys.stderr)
+        raise SystemExit(1)
     if not conditional:
         if collection:
             print('{"workflow_runs":[{"id":42,"run_attempt":1,"name":"build","status":"completed","conclusion":"success"}]}')
@@ -168,6 +184,7 @@ def _resource_cli(
         "GH_FORCE_TTY",
         "CLICOLOR_FORCE",
         "GH_REPO",
+        "GHD_CALLER_ID",
     ):
         env.pop(name, None)
     env.update(
@@ -178,6 +195,7 @@ def _resource_cli(
         GHD_CACHE_MAX_ENTRIES="4096",
         GHD_CACHE_MAX_BYTES="67108864",
         GHD_CACHE_DISK="0",
+        GHD_RATE_RESERVE="0",
         GHD_CACHE_TTLS="{}",
         GHD_CACHE_SETTLED_MS="2000",
         GH_CONFIG_DIR=str(config),

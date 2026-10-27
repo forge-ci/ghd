@@ -326,3 +326,54 @@ back to that slot. Cancellation and failed revalidation therefore cannot leave
 an undercharged body indexed. Detached GraphQL batch workers own separate
 32-permit capacity until completion, and each batch admits at most 32 distinct
 PRs. Subscriber cancellation cannot free a worker's still-live capacity.
+
+
+## Shared dispatch budget and durable cooldown
+
+`ghd-core::governor::State` evaluates provider buckets and throttle deadlines
+against an explicit clock. REST core/search/code-search categories and GraphQL
+remain distinct. A cooldown applies across that credential identity. Plain 403
+permission denial is not a rate signal; 429, depleted/retry-marked 403 and typed
+or recognized GraphQL rate errors are. Retry-After seconds/dates and primary
+reset hints control the deadline; missing hints use bounded exponential delay.
+
+`governor_ledger::Ledger` serializes admission/completion with the existing
+bounded private-directory custody helper. Its 16 KiB versioned record binds a
+checksum to the record type and identity; it contains at most four pending
+reservations and sixteen provider buckets. Missing/corrupt custody never resets cooldown silently.
+Three nonessential operations may be pending; the fourth slot is protected.
+Each reservation records its category/window and minimum estimated units.
+A 304 refunds only its own same-window reservation. Out-of-order observations
+cannot roll back a newer window. Successful introspection can observe other
+provider resource buckets without canceling an active secondary cooldown.
+
+The daemon mirrors those limits with owned semaphores. Upstream HTTP requests
+have a 60-second total deadline; gh children have bounded output and a 60-second
+execution deadline. A canceled HTTP operation leaves its durable reservation;
+a blocking child's owner carries its process/governor permits until reaped.
+Expired unknown reservations cause a conservative sixty-second cooldown from
+their 180-second lease deadline. Explicit cancellation before known dispatch
+can finish its reservation. Actual dispatch is never replayed automatically.
+
+Essential admission precedes a GraphQL mutation's write intent, so a refused
+mutation does not leave a false uncertain-write fence. Accepted writes still
+record intent before actual upstream dispatch, invalidate retained generations,
+and retain intent when completion is uncertain. Explicit no-cache REST reads
+and fresh quota introspection can use the protected slot; only introspection
+bypasses quota/cooldown refusal. Fresh cache hits need no governed dispatch.
+There is no hidden stale fallback and no automatic upstream retry loop.
+
+A task-local caller digest is carried separately from protobuf body keys and
+explicitly propagated to detached batch workers. Batches attribute their real
+dispatch to their first request; waiting callers retain their request/cache-hit
+counts. Metrics have a bounded caller table with an overflow bucket, reset at
+daemon startup and expose no raw labels, cwd or credentials. Provider headers,
+logical HTTP/gh dispatches and minimum-unit estimates are distinct quantities.
+Internal redirects, gh subrequests and external users are not measured points.
+
+This policy covers daemon-managed read/HTTP routes, including its direct
+GraphQL mutation route. Native passthrough/interactive streams retain their
+original behavior and are not intercepted. It does not claim a machine-wide
+proxy, per-caller quotas or a priority scheduler. Selected native integration
+commands run the whole installed-test directory; unmarked controlled-cache
+tests also keep their existing routine fast-lane coverage.
