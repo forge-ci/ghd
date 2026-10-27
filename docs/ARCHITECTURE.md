@@ -417,7 +417,10 @@ Transport/configuration errors remain distinct from service freshness refusal.
 Core operations reuse the private-state directory lock helper for separate
 maintenance and lifetime-owner directories. A foreground daemon acquires the
 owner lock before binding/publishing an endpoint; detached autostart retains
-the existing start lock and health check. Maintenance serializes explicit
+the existing start lock and health check. Detached spawn goes through
+kernal-api with null stdin and explicit log-file handles, preventing a
+surviving Windows daemon from retaining the launcher's capture pipes.
+Maintenance serializes explicit
 starts/restarts. Stop uses the current authenticated endpoint and never a PID.
 The daemon closes admission atomically with checking active handler count and
 upstream/read permits. Busy stop returns 409. Accepted stop schedules runtime

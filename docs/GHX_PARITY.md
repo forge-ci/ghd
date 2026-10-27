@@ -391,3 +391,21 @@ reads; those and scoped/forced REST controls are now ineligible. Recorded writes
 clear modeled retention without inferring resource relationships.
 Final `./ci.py all` passes all gates and 179 Python cases. Read-only review is
 clean; precheck has zero violations and 17 existing local review items.
+
+## Native lifecycle correction after #14
+
+Run40512325192 passed fast, Dylint and both macOS integration lanes, but both
+Windows integration lanes timed out after the first two operational tests;
+CI OK failed. This is not a passing result. The third case captures concurrent
+launcher output while a daemon survives it. The old Windows std spawn can
+inherit unrelated capture handles into that surviving daemon, retaining EOF.
+The platform facade now uses kernal-api's existing synchronous daemon boundary,
+which passes only explicit regular log handles and null stdin. The old native
+spawn copies are removed, and the lifecycle regression stays enabled.
+Native integration also dumps Python thread stacks after a stuck case exceeds
+60 seconds; test assertions and job deadlines remain unchanged. Local testing
+passes all Rust suites and 179 Python cases, backend smoke/action gates, and
+format/LOC checks. An unused-import lint from the initial run was removed;
+corrected clippy, Ruff and pylint pass. Precheck has zero violations and the
+same 17 review items; read-only review is clean. Full native verification is
+pending.

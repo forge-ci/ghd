@@ -1,13 +1,9 @@
-//! Detached spawn: a new process group, so the caller's Ctrl-C or session
-//! teardown does not reach the daemon.
+//! Native Unix exit-status interpretation. Daemon spawning uses kernal-api.
 
 use std::io;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Child, Command, ExitStatus};
+use std::os::unix::process::ExitStatusExt;
+use std::process::ExitStatus;
 
-pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<Child> {
-    command.process_group(0).spawn()
-}
 
 pub(crate) fn exit_status_code(status: ExitStatus) -> i32 {
     status.code().or_else(|| status.signal().map(|signal| 128 + signal)).unwrap_or(1)

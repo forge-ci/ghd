@@ -328,6 +328,8 @@ def cmd_integration_test(args: argparse.Namespace) -> int:
         "pytest",
         "-o",
         "pythonpath=",
+        "-o",
+        "faulthandler_timeout=60",
         "tests/integration",
     ]
     print(f"+ {' '.join(cmd)}", flush=True)

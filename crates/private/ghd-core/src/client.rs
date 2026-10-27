@@ -8,7 +8,7 @@ use crate::{identity::Identity, platform};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 const START_DEADLINE: Duration = Duration::from_secs(5);
@@ -203,12 +203,8 @@ pub(crate) fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
     let log = std::fs::File::create(dir.join("daemon.log"))?;
     let mut command = Command::new(daemon_exe()?);
     identity.configure_child(&mut command);
-    command
-        .arg("daemon")
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    platform::process::spawn_detached(&mut command)?;
+    command.arg("daemon");
+    platform::process::spawn_detached(&mut command, &log)?;
     let deadline = Instant::now() + START_DEADLINE;
     while Instant::now() < deadline {
         if let Some(ep) = healthy(identity) {
