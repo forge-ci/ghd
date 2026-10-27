@@ -89,11 +89,11 @@ pub async fn render(
     task.cancel();
     let _ = task.await;
     let output = result?;
-    let raw = output.exit.raw_code();
+    let exit_code = crate::platform::process::bounded_exit_code(output.exit.raw_code())?;
     Ok(GhReadResponse {
         stdout: output.stdout,
         stderr: output.stderr,
-        exit_code: if raw < 0 { 128 - raw } else { raw },
+        exit_code,
         source: "rendered-locally".into(),
         ..Default::default()
     })

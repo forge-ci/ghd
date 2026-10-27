@@ -63,6 +63,7 @@ pub struct ReadPlan {
     pub template: Option<String>,
     pub filters: BTreeMap<String, String>,
     pub worktree_dependent: bool,
+    pub rest: Option<crate::rest::RestPlan>,
 }
 
 #[derive(Default)]
@@ -228,6 +229,9 @@ pub fn prepare(
     host: &str,
     default_repo: Option<&str>,
 ) -> io::Result<Option<ReadPlan>> {
+    if args.first().is_some_and(|word| word == "api") {
+        return Ok(crate::rest::prepare(args, host)?.map(api_plan));
+    }
     let words: Vec<_> = args.iter().map(String::as_str).collect();
     if compat::classify(&words) != compat::Kind::Read || args.len() < 2 {
         return Ok(None);
@@ -291,6 +295,7 @@ pub fn prepare(
         template: None,
         filters: BTreeMap::new(),
         worktree_dependent: scoped,
+        rest: None,
     };
     if let Some(repo) = &plan.repo {
         // The executable receives a source-bound target, not an inferred fork.
@@ -308,6 +313,27 @@ pub fn prepare(
     }
     prepare_projection(&mut plan, &parsed)?;
     Ok(Some(plan))
+}
+
+fn api_plan(rest: crate::rest::RestPlan) -> ReadPlan {
+    ReadPlan {
+        host: rest.host.clone(),
+        repo: None,
+        kind: "api".into(),
+        action: "GET".into(),
+        key_args: rest.fetch_args.clone(),
+        fetch_args: rest.fetch_args.clone(),
+        fields: Vec::new(),
+        fetch_fields: Vec::new(),
+        limit: None,
+        array: false,
+        resource: false,
+        jq: rest.jq.clone(),
+        template: rest.template.clone(),
+        filters: BTreeMap::new(),
+        worktree_dependent: false,
+        rest: Some(rest),
+    }
 }
 
 fn append_options(args: &mut Vec<String>, parsed: &Arguments) {

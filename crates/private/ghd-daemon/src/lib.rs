@@ -14,6 +14,7 @@ mod gh_executor;
 mod gh_reads;
 mod gh_render;
 pub mod graphql;
+mod rest_reads;
 mod run_collection;
 pub mod server;
 pub mod upstream;

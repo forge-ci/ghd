@@ -12,3 +12,9 @@ pub fn spawn_detached(command: &mut Command) -> io::Result<Child> {
 pub fn exit_status_code(status: ExitStatus) -> i32 {
     crate::platform_imp::process::exit_status_code(status)
 }
+
+/// Convert the bounded runner's native status without confusing Windows codes
+/// with Unix's negative signal representation.
+pub fn bounded_exit_code(raw: i32) -> io::Result<i32> {
+    crate::platform_imp::process::bounded_exit_code(raw)
+}

@@ -70,6 +70,8 @@ pub(crate) struct State {
     cache_epoch: Mutex<u64>,
     pub(crate) github_token: String,
     pub(crate) gh_reads: crate::gh_reads::Cache,
+    pub(crate) rest_reads: crate::rest_reads::Cache,
+    pub(crate) rest_counters: crate::rest_reads::Counters,
     pub(crate) gh_permits: kernal_api::async_engine::Semaphore,
     pub(crate) render_root: std::path::PathBuf,
 }
@@ -94,6 +96,8 @@ pub(crate) fn new_state(
         cache_epoch: Mutex::new(0),
         github_token: identity.token().to_string(),
         gh_reads: Mutex::new(HashMap::new()),
+        rest_reads: Mutex::new(HashMap::new()),
+        rest_counters: crate::rest_reads::Counters::default(),
         gh_permits: kernal_api::async_engine::Semaphore::new(4),
         render_root: endpoint::directory(identity)?.join("renders"),
     })
@@ -111,6 +115,7 @@ async fn sync_epoch(state: &State, epoch: u64) -> io::Result<()> {
         state.cache.lock().await.clear();
         state.graphql.lock().await.clear();
         state.gh_reads.lock().await.clear();
+        state.rest_reads.lock().await.clear();
         *current = epoch;
     }
     Ok(())
@@ -384,6 +389,7 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
         state.cache.lock().await.clear();
         state.graphql.lock().await.clear();
         state.gh_reads.lock().await.clear();
+        state.rest_reads.lock().await.clear();
         return match state.upstream.graphql_raw(&upstream_body).await {
             Ok((status, json)) => {
                 if status < 500
@@ -459,6 +465,9 @@ fn stats(state: &State) -> Response {
         "core_remaining".into(),
         Value::Signed(c.core_remaining.load(Ordering::Relaxed)),
     );
+    if let Err(error) = state.rest_counters.add_stats(&mut doc) {
+        return text(500, &error.to_string());
+    }
     match json::encode(&Value::Object(doc), Layout::Pretty) {
         Ok(body) => Response::new(200, body)
             .and_then(|r| r.with_header("content-type", "application/json"))

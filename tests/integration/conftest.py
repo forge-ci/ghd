@@ -29,6 +29,15 @@ FAKE_GH = r"""
 import json, os, sys, urllib.request
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 args = sys.argv[1:]
+if args[:2] == ["api", "fixture/body"]:
+    with open(TRACE_PATH, "a", encoding="utf-8") as trace:
+        trace.write(json.dumps(args) + "\n")
+    if any(word.startswith("If-None-Match:") for word in args):
+        print('HTTP/1.1 304 Not Modified\nETag: "portable-v1"\n')
+    else:
+        print('HTTP/1.1 200 OK\nETag: "portable-v1"\nCache-Control: private, max-age=60\n')
+        print('{"number":42,"title":"portable REST fixture"}')
+    raise SystemExit(0)
 if args and args[0] == "api":
     if REAL_GH is not None:
         os.execv(REAL_GH, [REAL_GH, *args])
@@ -180,6 +189,7 @@ def _resource_cli(
             def invoke(
                 *args: str,
                 direct: bool = False,
+                native: bool = False,
                 python_code: str | None = None,
                 context: dict[str, str] | None = None,
             ) -> subprocess.CompletedProcess[str]:
@@ -188,6 +198,8 @@ def _resource_cli(
                     if direct
                     else [str(binary), "gh", *args]
                 )
+                if native:
+                    command = [str(binary), *args]
                 if python_code is not None:
                     command = [sys.executable, "-c", python_code]
                 return subprocess.run(
@@ -221,6 +233,8 @@ def stop_daemon(daemon: subprocess.Popen[bytes]) -> None:
 @pytest.fixture(name="mock_github")
 def _mock_github(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
     """The real gh transport goes only to this private local API fixture."""
+    if is_windows() or shutil.which("gh") is None:
+        pytest.skip("real gh local Unix transport")
     socket = tmp_path / "api.sock"
     trace = tmp_path / "api-calls.jsonl"
     context = {
@@ -330,19 +344,49 @@ class MockGithubHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args: object, **_kwargs: object) -> None:
         pass
 
+    def fixture_value(self, name: str, default: str) -> str:
+        path = self.fixture[0].parent / name
+        return path.read_text(encoding="utf-8") if path.exists() else default
+
+    def quota(self, status: int) -> int:
+        used = int(self.fixture_value("core-used", "0"))
+        if (
+            status == 200
+            and self.command == "GET"
+            and urlsplit(self.path).path != "/rate_limit"
+        ):
+            used += 1
+            (self.fixture[0].parent / "core-used").write_text(
+                str(used), encoding="utf-8"
+            )
+        return used
+
     def reply(
-        self, payload: object, *, collection: bool = False, next_path: str | None = None
+        self,
+        payload: object,
+        *,
+        collection: bool = False,
+        next_path: str | None = None,
+        status: int = 200,
     ) -> None:
-        if collection and self.headers.get("If-None-Match") == '"runs-fixture"':
-            self.send_response(304)
-            self.send_header("ETag", '"runs-fixture"')
+        etag = '"runs-fixture-' + self.fixture_value("api-version", "1") + '"'
+        validator = collection and not (self.fixture[0].parent / "api-no-etag").exists()
+        unchanged = validator and self.headers.get("If-None-Match") == etag
+        status = 304 if unchanged else status
+        self.send_response(status)
+        self.send_header("X-RateLimit-Resource", "core")
+        used = self.quota(status)
+        self.send_header("X-RateLimit-Used", str(used))
+        self.send_header("X-RateLimit-Remaining", str(5000 - used))
+        self.send_header("X-RateLimit-Limit", "5000")
+        self.send_header("X-RateLimit-Reset", "4102444800")
+        if validator:
+            self.send_header("ETag", etag)
+        if unchanged:
             self.end_headers()
             return
         encoded = json.dumps(payload).encode()
-        self.send_response(200)
-        if collection:
-            self.send_header("ETag", '"runs-fixture"')
-        else:
+        if not collection:
             self.send_header("Cache-Control", "no-store")
         if next_path:
             self.send_header("Link", f'<https://api.github.com{next_path}>; rel="next"')
@@ -353,7 +397,18 @@ class MockGithubHandler(http.server.BaseHTTPRequestHandler):
 
     def record(self, query: str | None = None) -> None:
         with self.fixture[0].open("a", encoding="utf-8") as output:
-            output.write(json.dumps({"path": self.path, "query": query}) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "path": self.path,
+                        "query": query,
+                        "accept": self.headers.get("Accept"),
+                        "range": self.headers.get("Range"),
+                        "validator": self.headers.get("If-None-Match"),
+                    }
+                )
+                + "\n"
+            )
 
     def do_POST(self) -> None:  # pylint: disable=invalid-name
         _, issue, pull, _, rollup = self.fixture
@@ -423,7 +478,12 @@ class MockGithubHandler(http.server.BaseHTTPRequestHandler):
                 else None
             )
             self.reply(
-                {"total_count": len(runs), "workflow_runs": rows},
+                {
+                    "total_count": len(runs),
+                    "workflow_runs": rows,
+                    "fixture_version": self.fixture_value("api-version", "1"),
+                    "fixture_accept": self.headers.get("Accept"),
+                },
                 collection=True,
                 next_path=next_path,
             )
@@ -440,5 +500,32 @@ class MockGithubHandler(http.server.BaseHTTPRequestHandler):
             self.reply({"id": 7, "name": "workflow metadata"})
         elif "/actions/runs/42" in self.path:
             self.reply(runs[0])
+        elif self.path == "/rate_limit":
+            used = int(self.fixture_value("core-used", "0"))
+            self.reply(
+                {
+                    "resources": {
+                        "core": {"used": used, "remaining": 5000 - used, "limit": 5000}
+                    }
+                }
+            )
+        elif self.path == "/fixture/error":
+            self.reply(
+                {
+                    "message": "Not Found",
+                    "documentation_url": "https://example.invalid/rest",
+                    "status": "404",
+                },
+                status=404,
+            )
         else:
             raise AssertionError(f"undeclared API request: {self.path}")
+
+    def do_HEAD(self) -> None:  # pylint: disable=invalid-name
+        self.record()
+        self.send_response(200)
+        self.end_headers()
+
+    def date_time_string(self, timestamp: float | None = None) -> str:
+        del timestamp
+        return "Thu, 01 Jan 2026 00:00:00 GMT"

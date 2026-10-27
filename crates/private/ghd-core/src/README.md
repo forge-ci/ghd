@@ -80,3 +80,7 @@ normalization and nested-order-preserving projections. `reads.rs` supplies
 the shared CLI/Python protobuf request, explicit backend/context and read-only
 API. The compatibility executor remains the owner of unsupported/interactive
 forms; writes still enter the journal before real gh dispatch.
+
+`rest.rs` handles safe API GET grammar and explicit target binding. It rejects
+cache-ambiguous shapes while compatibility classification still recognizes
+GET/HEAD as reads. REST and resource plans share caller context and protobuf.

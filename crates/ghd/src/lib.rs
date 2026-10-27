@@ -18,7 +18,7 @@
 
 pub use ghd_core::{
     cli, client, coherence, compat, endpoint, fields, identity, operation, proto, reads, resource,
-    version_banner,
+    rest, version_banner,
 };
 
 #[cfg(feature = "daemon")]

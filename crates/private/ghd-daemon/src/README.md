@@ -70,3 +70,7 @@ singleflight and shared epoch validation. `gh_executor.rs` runs bounded,
 identity-pinned gh children; `gh_render.rs` delegates jq/templates over private
 loopback HTTP. `run_collection.rs` retains Actions collection validators with
 the corresponding bodies and maps only fields covered by that validator.
+
+`rest_reads.rs` retains API bodies with validators, private identity scope and
+write epochs. Its cache policy honors no-store, no-cache, max-age and wildcard
+Vary. HTTP operation counters are separate from observed provider quota totals.

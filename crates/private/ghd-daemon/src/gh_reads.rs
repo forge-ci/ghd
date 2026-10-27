@@ -39,7 +39,7 @@ fn failed(status: u16, error: impl ToString) -> Response {
     )
 }
 
-fn key(request: &GhReadRequest, plan: &ReadPlan) -> String {
+pub(crate) fn key(request: &GhReadRequest, plan: &ReadPlan) -> String {
     let mut canonical = request.clone();
     canonical.args.clone_from(&plan.key_args);
     if !plan.worktree_dependent {
@@ -83,6 +83,9 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
             io::ErrorKind::PermissionDenied,
             "gh read host does not match daemon identity",
         ));
+    }
+    if plan.rest.is_some() {
+        return crate::rest_reads::run(state, request, &plan).await;
     }
     let epoch = read_epoch(state).await?;
     let slot = {

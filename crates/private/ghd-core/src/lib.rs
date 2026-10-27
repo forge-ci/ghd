@@ -26,6 +26,7 @@ pub mod operation;
 pub mod proto;
 pub mod reads;
 pub mod resource;
+pub mod rest;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.
 pub fn version_banner() -> String {

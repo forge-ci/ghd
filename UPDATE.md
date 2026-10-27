@@ -107,3 +107,15 @@ references removed concepts is worse than no procedure.
   authenticated local HTTP with isolated renderer credentials/configuration.
 - Enforce private directory custody through the existing kernal-api facade on
   all platforms; bound and validate endpoint/journal files before decoding.
+
+## ghx parity: general REST GET bodies (#10)
+
+- Retain safe relative-endpoint GET bodies and validators through the shared
+  CLI/Python reader, preserving host/credential, headers and parameter scope.
+- Reuse retained bytes after 304, replace bodies on changed ETags, use full GETs
+  without validators and refuse no-store/wildcard-Vary retention. Range and
+  diagnostic/paginated/input shapes retain native gh execution.
+- Render jq/templates from raw retained bytes. Preserve native HTTP errors;
+  never substitute an old authoritative body after upstream failure.
+- Keep rate-limit introspection fresh and report HTTP operations/responses,
+  revalidations and provider quota observations as separate measurements.

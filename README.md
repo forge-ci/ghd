@@ -147,6 +147,24 @@ and no external proxy access.
   returns data from before a write.
 - A body with `errors` is printed and the command exits 1, as with gh.
 
+**`ghd api <endpoint>`** caches safe REST GET bodies and revalidates expired
+entries with their ETag. A 304 returns the retained body. `--hostname`, custom
+representation headers and parameters stay isolated; `--jq` and templates use
+the retained raw body. No-store and Range reads are never reused. Calls to
+`rate_limit` always measure the provider rather than returning a cached sample.
+
+Explicit `--include`, pagination/slurp, verbose/silent modes, file/stdin inputs,
+custom authorization and caller-supplied validators keep real gh execution.
+These modes retain their original headers, pages, bytes and status; they are
+not advertised as conditional-cache support. POST and other unsafe methods
+still enter the shared write fence.
+
+REST telemetry adds `rest_http_operations`, `rest_http_responses`, `rest_304`,
+cache/error counters and `rest_provider_budgets`. Operations count logical gh
+API dispatches, including failed attempts; they do not enumerate redirect
+hops. A 304 is an HTTP operation. Provider budgets are observed bucket totals
+across clients, not inferred points spent by this daemon.
+
 **`ghd stats`** prints the daemon's counters as JSON: `reads`,
 `served_fresh`, `sentinel_304_free`, `sentinel_200`, `graphql_queries`,
 `graphql_prs_fetched`, `graphql_points_spent`, `api_graphql_upstream`,
@@ -168,7 +186,7 @@ shims are rejected.
 Known safe reads pass through without a write fence. Mutations and unknown
 commands record an intent in the shared write journal before dispatch. Every
 daemon checks the journal before and after cached reads. A completed write
-advances the generation and invalidates PR, raw GraphQL and resource-read caches,
+advances the generation and invalidates PR, raw GraphQL, resource-read and REST caches,
 including results still in flight. This also works when a daemon was stopped
 while a subprocess performed the write.
 

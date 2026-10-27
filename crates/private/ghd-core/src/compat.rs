@@ -23,6 +23,7 @@ pub fn classify(args: &[&str]) -> Kind {
         return Kind::Local;
     }
     match args {
+        ["api", ..] if crate::rest::is_read_only(args) => Kind::Read,
         ["pr", "list" | "view" | "status" | "checks" | "diff", ..]
         | ["issue", "list" | "view" | "status", ..]
         | ["run", "list" | "view" | "watch", ..]

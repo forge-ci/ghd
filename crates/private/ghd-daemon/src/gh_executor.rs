@@ -102,9 +102,7 @@ pub async fn execute(
     .await
     .map_err(io::Error::other)?
     .map_err(io::Error::other)?;
-    let raw = output.exit.raw_code();
-    // BoundedProcessExit's portable contract represents a signal as -signal.
-    let exit_code = if raw < 0 { 128 - raw } else { raw };
+    let exit_code = crate::platform::process::bounded_exit_code(output.exit.raw_code())?;
     Ok(GhReadResponse {
         stdout: output.stdout,
         stderr: output.stderr,

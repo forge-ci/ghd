@@ -20,7 +20,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #7 | Host and credential isolation | Implemented and verified in 646f5db; draft PR #18 |
 | #8 | gh passthrough and mutation coherence | Implemented and verified; draft PR #18 |
 | #9 | Expanded resource and collection reads | Implemented and verified; draft PR #18 |
-| #10 | General REST cache and revalidation | Pending |
+| #10 | General REST cache and revalidation | Implemented and locally verified; draft PR #18 |
 | #11 | Bounded durable cache and restart invalidation | Pending |
 | #12 | Shared rate governor and cooldown | Pending |
 | #13 | Repository snapshots and authority freshness | Pending |
@@ -185,3 +185,51 @@ real-gh CLI/Python goldens, 101-row pagination, diagnostic bypass and retained
 ETag bodies. Read-only clud-review is clean after the reported corrections.
 Contract precheck reports zero violations; its 17 existing local-only
 needs-review checks remain visible. No gate was weakened or workflow added.
+
+## General REST cache (#10)
+
+The installed `test_rest_get_caches_the_response_body` first failed because two
+identical GETs both reached the private local API. Its response bytes matched;
+the cold-request count exposed the missing retention. The shared installed
+API test harness was extracted separately in bde3b41, with all 111 tests and
+Python lint passing, before adding REST behavior.
+
+The parser accepts relative, explicitly host-bound safe GET shapes and keeps
+methods, parameters, representations and caller context in the cache identity.
+The daemon retains bodies and ETags together, renders jq/templates locally and
+checks the write epoch around publication. Conditional calls use the same
+caller-bound real-gh transport as resource reads. No-store responses and
+wildcard Vary cannot enter retained data. Missing validators use full GETs;
+rate_limit introspection always goes upstream.
+
+Explicit response-header display, pagination/slurp, verbose/silent output,
+caller validators, Range, alternate Authorization/Cookie and file/stdin inputs
+retain real gh execution. These shapes are not claimed as conditional-cache
+support. Native pagination still preserves every page. The published raw
+GraphQL route and batching stay separate and unchanged.
+
+HTTP operations and final parsed responses are counted separately from 304
+revalidations. Provider-reported budget observations retain their resource,
+used/remaining/limit/reset fields. These are shared provider totals, not an
+invented per-command point cost or a count of redirect hops. Verification results are recorded below.
+
+The first installed REST gate passes all 121 Python tests and the Rust suites.
+Review then added caller If-Match/If-Unmodified-Since bypass and conservative
+request max-age validation. Bounded native status conversion now lives in the
+existing platform adapters: Unix signals become shell codes and Windows crash
+status bits remain intact. These corrections are included in final validation.
+
+Final local validation: `./ci.py all` reports ALL GATES PASSED, including
+122 installed Python tests, core41/daemon19/platform5 Rust tests, backend wheel
+smoke and action checks. Read-only clud-review is clean after the request-policy
+correction. The REST suite includes a portable synthetic subprocess case and
+real-gh Unix API cases; the platform adapter has native Windows crash-bit tests.
+
+## Native Windows validation follow-up
+
+[Hosted run40473014155](https://github.com/forge-ci/ghd/actions/runs/40473014155)
+for adc690e passes fast, Dylint and native macOS x64/arm64. Windows x64/arm64
+cross-builds pass; native tests report a write-journal failure and hang in the
+lost-reply fixture until job cancellation. Native Windows validation remains
+incomplete. The next correction addresses those foundation failures before
+full-goal delivery; no Windows success is inferred from the local Linux run.

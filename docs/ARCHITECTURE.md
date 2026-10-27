@@ -231,3 +231,30 @@ private, external proxies fail closed and only the local GET route is served.
 The directory owner remains alive until the bounded child is reaped and then
 cleans it. Render failures retain native stderr/status and do not overwrite
 the canonical cached JSON. This feature adds no hosted workflow.
+
+## General REST bodies
+
+Core `rest.rs` classifies safe GET request shapes and normalizes the explicit
+host/method, while retaining every representation header and parameter in the
+request identity. Unsupported diagnostics, page aggregation, caller validators,
+Range/auth headers and file/stdin inputs keep real gh's original execution.
+Unsafe methods continue through the shared write-intent compatibility route.
+
+`rest_reads.rs` stores raw bytes with their ETag, stderr, validation time and
+bounded freshness policy. Per-key locks coalesce concurrent refreshes. Every
+fetch uses bounded, credential-pinned gh execution with the caller's transport
+context. No-store/wildcard-Vary responses cannot persist in the map, and
+no-cache/max-age policies constrain the short application freshness window.
+A 304 requires the matching retained validator/body; a 200 replaces them and a
+missing validator causes the next stale refresh to fetch the full body.
+The same generation fence clears all four read maps and rejects old in-flight
+publications. The generic REST map remains in memory pending #11's bounded
+durable store.
+
+Transformations run through the private local gh renderer on every read;
+canonical body sharing does not freeze time-dependent template output. Error
+bodies preserve native status/stderr without becoming authoritative entries.
+Quota telemetry stores bounded provider bucket observations separately from
+logical HTTP dispatches and validated 304 reuse. It does not attribute shared
+provider totals to individual commands or claim to count internal redirect
+hops. `rate_limit` itself bypasses body reuse and records fresh observations.

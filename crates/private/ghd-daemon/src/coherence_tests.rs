@@ -154,6 +154,12 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
             .lock()
             .await
             .insert("resource".into(), Arc::new(Mutex::new(None)));
+        harness
+            .state
+            .rest_reads
+            .lock()
+            .await
+            .insert("rest".into(), Arc::new(Mutex::new(None)));
         let port = harness.port;
         let key = harness.key.clone();
         let pending = async_engine::launch(async move { request(port, &key, "{ version }").await });
@@ -174,6 +180,7 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
         );
         assert!(harness.state.graphql.lock().await.is_empty());
         assert!(harness.state.gh_reads.lock().await.is_empty());
+        assert!(harness.state.rest_reads.lock().await.is_empty());
         harness.release.notify_one();
         let (status, stale) = pending.await.expect("pending reader");
         assert_eq!(status, 409);
