@@ -2,8 +2,30 @@
 
 use crate::client;
 use crate::proto::{GraphqlRequest, GraphqlResponse, GraphqlVariable};
+use kernal_api::json::{self, Value};
 use prost::Message;
 use std::io::{self, Read, Write};
+
+/// The message of the response's `errors`, if it has any.
+pub fn response_error(json_body: &[u8]) -> Option<String> {
+    let Ok(Value::Object(top)) = json::parse(json_body) else {
+        return Some(String::from_utf8_lossy(json_body).into_owned());
+    };
+    let Value::Array(errors) = top.get("errors")? else {
+        return None;
+    };
+    let messages: Vec<String> = errors
+        .iter()
+        .map(|e| match e {
+            Value::Object(m) => match m.get("message") {
+                Some(Value::String(s)) => s.clone(),
+                _ => "error".to_string(),
+            },
+            _ => "error".to_string(),
+        })
+        .collect();
+    (!messages.is_empty()).then(|| messages.join("; "))
+}
 
 fn invalid(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)

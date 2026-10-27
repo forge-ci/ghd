@@ -73,7 +73,7 @@ fn worktree_stamp() -> io::Result<String> {
     Ok(kernal_api::hash::blake3_bytes(&result.stdout).to_hex())
 }
 
-fn uncached_context() -> bool {
+pub fn uncached_context() -> bool {
     ["GH_FORCE_TTY", "CLICOLOR_FORCE", "GH_DEBUG", "DEBUG"]
         .iter()
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
@@ -90,6 +90,22 @@ pub fn prepare(args: &[String]) -> io::Result<Option<GhReadRequest>> {
     let Some(plan) = resource::prepare(args, &host, repo.as_deref())? else {
         return Ok(None);
     };
+    backend_request(
+        args,
+        plan.host,
+        repo.unwrap_or_default(),
+        plan.worktree_dependent,
+    )
+    .map(Some)
+}
+
+/// Build the caller-bound executable/environment context for daemon read APIs.
+pub fn backend_request(
+    args: &[String],
+    hostname: String,
+    default_repo: String,
+    worktree_dependent: bool,
+) -> io::Result<GhReadRequest> {
     let command = compat::command()?;
     let cwd = std::env::current_dir()?;
     let path = std::path::Path::new(command.get_program());
@@ -132,20 +148,20 @@ pub fn prepare(args: &[String]) -> io::Result<Option<GhReadRequest>> {
             })
         })
         .collect::<io::Result<_>>()?;
-    Ok(Some(GhReadRequest {
+    Ok(GhReadRequest {
         args: args.to_vec(),
         cwd: text_path(&cwd)?,
         program: text_path(&program)?,
         program_stamp: format!("{}:{stamp}", metadata.len()),
-        default_repo: repo.unwrap_or_default(),
-        worktree_stamp: if plan.worktree_dependent {
+        default_repo,
+        worktree_stamp: if worktree_dependent {
             worktree_stamp()?
         } else {
             String::new()
         },
         environment,
-        hostname: plan.host,
-    }))
+        hostname,
+    })
 }
 
 pub fn request_reply(request: &GhReadRequest) -> io::Result<GhReadResponse> {

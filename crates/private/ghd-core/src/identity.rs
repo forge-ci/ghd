@@ -142,6 +142,21 @@ impl Identity {
 }
 
 /// A repository selector may bind its host explicitly. Never discard it.
+/// Bind an explicit hostname to a repository selector, rejecting conflicts.
+pub fn bound_repository(
+    selector: &str,
+    explicit: Option<&str>,
+) -> io::Result<(Option<String>, String, String)> {
+    let explicit = explicit.map(hostname).transpose()?;
+    let (bound, owner, name) = repository(selector)?;
+    if let (Some(explicit), Some(bound)) = (&explicit, &bound)
+        && explicit != bound
+    {
+        return Err(invalid("repository and --hostname select different hosts"));
+    }
+    Ok((explicit.or(bound), owner, name))
+}
+
 pub fn repository(value: &str) -> io::Result<(Option<String>, String, String)> {
     let value = value
         .strip_prefix("https://")

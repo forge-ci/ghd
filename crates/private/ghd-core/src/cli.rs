@@ -123,13 +123,8 @@ pub fn parse_pr_view(
         Some(r) => r,
         None => default_repo()?,
     };
-    let (repo_host, owner, name) = crate::identity::repository(&repo)?;
-    if let (Some(explicit), Some(bound)) = (&host, &repo_host)
-        && explicit != bound
-    {
-        return Err(invalid("repository and --hostname select different hosts"));
-    }
-    let hostname = host.or(repo_host).unwrap_or_default();
+    let (hostname, owner, name) = crate::identity::bound_repository(&repo, host.as_deref())?;
+    let hostname = hostname.unwrap_or_default();
     Ok(PrViewRequest {
         owner,
         repo: name,

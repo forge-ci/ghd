@@ -37,14 +37,30 @@ fn failed(status: u16, error: impl ToString) -> Response {
 }
 
 pub(crate) fn key(request: &GhReadRequest, plan: &ReadPlan) -> String {
+    context_key(
+        request,
+        &plan.key_args,
+        plan.worktree_dependent,
+        plan.resource,
+        plan.repo.as_deref().unwrap_or_default(),
+    )
+}
+
+pub(crate) fn context_key(
+    request: &GhReadRequest,
+    args: &[String],
+    worktree_dependent: bool,
+    normalize_repo: bool,
+    repo: &str,
+) -> String {
     let mut canonical = request.clone();
-    canonical.args.clone_from(&plan.key_args);
-    if !plan.worktree_dependent {
+    canonical.args = args.to_vec();
+    if !worktree_dependent {
         canonical.cwd.clear();
         canonical.worktree_stamp.clear();
     }
-    if plan.resource {
-        canonical.default_repo = plan.repo.clone().unwrap_or_default();
+    if normalize_repo {
+        canonical.default_repo = repo.to_owned();
         canonical.environment.retain(|v| v.name != "GH_REPO");
     }
     canonical.environment.sort_by(|a, b| a.name.cmp(&b.name));

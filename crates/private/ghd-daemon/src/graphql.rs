@@ -61,26 +61,7 @@ fn is_mutation(query: &str) -> bool {
     !matches!(classify(query, None), Ok(Operation::Read))
 }
 
-/// The message of the response's `errors`, if it has any.
-pub fn errors(json_body: &[u8]) -> Option<String> {
-    let Ok(Value::Object(top)) = json::parse(json_body) else {
-        return Some(String::from_utf8_lossy(json_body).into_owned());
-    };
-    let Value::Array(errors) = top.get("errors")? else {
-        return None;
-    };
-    let messages: Vec<String> = errors
-        .iter()
-        .map(|e| match e {
-            Value::Object(m) => match m.get("message") {
-                Some(Value::String(s)) => s.clone(),
-                _ => "error".to_string(),
-            },
-            _ => "error".to_string(),
-        })
-        .collect();
-    (!messages.is_empty()).then(|| messages.join("; "))
-}
+pub use ghd_core::graphql::response_error as errors;
 
 #[cfg(test)]
 mod tests {
