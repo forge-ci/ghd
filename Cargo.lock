@@ -805,7 +805,7 @@ dependencies = [
 [[package]]
 name = "kernal-api"
 version = "0.1.32"
-source = "git+https://github.com/forge-ci/kernal-api?rev=79b60ffa1f85b834c7096b679929c54862313a15#79b60ffa1f85b834c7096b679929c54862313a15"
+source = "git+https://github.com/forge-ci/kernal-api?rev=63b0da695e0887cd9ee025e81b89caee566b7d72#63b0da695e0887cd9ee025e81b89caee566b7d72"
 dependencies = [
  "blake3",
  "bytes",

@@ -465,3 +465,19 @@ and the same17 local review items. Owned launcher uninstall is explicit.
 Remaining published plugin packages/catalog qualification is tracked in
 [#20](https://github.com/forge-ci/ghd/issues/20), separate from verified local
 bootstrap delivery.
+
+The first plugin native run40534397063 passed Linux/macOS but failed both
+Windows cold-stop checks with sharing violation32. The pinned kernel's
+path_identity requested write access while verifying a running executable.
+The coordinated kernel correction uses read-only identity access, preserves
+private custody/replacement checks and adds a running-image regression. Its
+supervised Linux and Dylint local gates passed; ghd pins63b0da695e08 for the
+next native run. No test assertion or security check was relaxed.
+
+The dependency correction is [kernal-api PR489](https://github.com/forge-ci/kernal-api/pull/489).
+ghd uses its narrow named backport63b0da695e08, while the upstream PR is
+rebased onto current kernel main. The first updated local suite hit one
+bounded busy-lock response under concurrent verification load (187 passed);
+the unchanged focused retention regression then passed, followed by the full
+`./ci.py test` gate with188 passed. Every other aggregate gate passed, including
+backend wheel smoke; precheck remains0 violations/0 exceptions/17 review items.
