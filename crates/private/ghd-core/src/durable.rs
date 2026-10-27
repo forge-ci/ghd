@@ -51,6 +51,55 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+/// Shared process-bound private-state custody. Interrupted stages fail closed.
+pub(crate) fn lock_directory(directory: &std::path::Path) -> io::Result<File> {
+    platform::fs::create_private_dir(directory)?;
+    let path = directory.join("lock");
+    match platform::fs::create_private_file(&path) {
+        Ok(file) => drop(file),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let lock = OpenOptions::new().read(true).write(true).open(&path)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        // Windows byte locks can deny reads through another handle, even
+        // when the locked file is empty. Validate inside the bounded retry;
+        // a custody failure still returns explicitly if it persists.
+        if let Err(error) = platform::fs::read_private_file(&path, 0) {
+            if std::time::Instant::now() >= deadline {
+                return Err(error);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            continue;
+        }
+        match lock.try_lock() {
+            Ok(()) => {
+                for entry in std::fs::read_dir(directory)? {
+                    if entry?
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".ghd-write-")
+                    {
+                        return Err(invalid("interrupted cache publication requires recovery"));
+                    }
+                }
+                return Ok(lock);
+            }
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "cache snapshot is busy",
+                ));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
 impl Store {
     pub fn new(
         directory: PathBuf,
@@ -69,51 +118,7 @@ impl Store {
     }
 
     fn lock(&self) -> io::Result<File> {
-        platform::fs::create_private_dir(&self.directory)?;
-        let path = self.directory.join("lock");
-        match platform::fs::create_private_file(&path) {
-            Ok(file) => drop(file),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-        let lock = OpenOptions::new().read(true).write(true).open(&path)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        loop {
-            // Windows byte locks can deny reads through another handle, even
-            // when the locked file is empty. Validate inside the bounded retry;
-            // a custody failure still returns explicitly if it persists.
-            if let Err(error) = platform::fs::read_private_file(&path, 0) {
-                if std::time::Instant::now() >= deadline {
-                    return Err(error);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                continue;
-            }
-            match lock.try_lock() {
-                Ok(()) => {
-                    for entry in std::fs::read_dir(&self.directory)? {
-                        if entry?
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with(".ghd-write-")
-                        {
-                            return Err(invalid("interrupted cache publication requires recovery"));
-                        }
-                    }
-                    return Ok(lock);
-                }
-                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "cache snapshot is busy",
-                    ));
-                }
-                Err(std::fs::TryLockError::Error(error)) => return Err(error),
-            }
-        }
+        lock_directory(&self.directory)
     }
 
     fn load(&self, epoch: u64) -> io::Result<Cache<Vec<u8>>> {
