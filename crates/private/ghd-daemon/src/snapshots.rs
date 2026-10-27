@@ -75,6 +75,11 @@ pub(crate) async fn handle(state: &State, body: &[u8]) -> Response {
         },
         Err(error) => refused(error, None),
     };
+    crate::ledger::answer(
+        &response.source,
+        response.json.len(),
+        response.exit_code == 0 && response.error.is_empty(),
+    );
     state.control.answer(&response.source);
     Response::new(200, response.encode_to_vec())
         .and_then(|response| response.with_header("content-type", "application/x-protobuf"))
@@ -122,6 +127,9 @@ async fn run(state: &State, request: SnapshotRequest) -> io::Result<SnapshotResp
         gh_reads::context_key(&backend, &args, false, true, &repo).as_bytes(),
     );
     let slot = retention::snapshot(state, &key).await;
+    if slot.try_lock().is_err() {
+        crate::ledger::waited();
+    }
     let mut retained = slot.lock().await;
     let mut entry = retained.take();
     let ttl = crate::policy::ttl(state.policy.command("snapshot", "read", state.fresh_for));

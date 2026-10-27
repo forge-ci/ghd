@@ -267,6 +267,7 @@ def _resource_cli(
         GHD_CACHE_MAX_BYTES="67108864",
         GHD_CACHE_DISK="0",
         GHD_RATE_RESERVE="0",
+        GHD_LOG_ARGS="0",
         GHD_CACHE_TTLS="{}",
         GHD_CACHE_SETTLED_MS="2000",
         GH_CONFIG_DIR=str(config),

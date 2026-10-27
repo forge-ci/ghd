@@ -448,3 +448,40 @@ environment wins over a valid file, then defaults apply. Explicit lifecycle
 changes validate configuration before stopping, and a new daemon reads its
 configuration before endpoint publication. No environment mutation or second
 platform selector was introduced.
+
+## Bounded request evidence and replay
+
+`ledger::Ledger` owns a 256-row ring and dropped count. Only authenticated
+managed routes create a scoped event, with explicit operation kind and cache
+eligibility from the existing GraphQL operation classifier. Writes keep their
+dispatch evidence and are excluded from cache modeling. Reply helpers set outcome/payload
+size; a drop guard records completion or cancellation with elapsed latency.
+Rows contain an opaque request-body digest, fixed command label and existing
+hashed caller, never response data or raw arguments. Optional capture retains
+only a fixed flag-name allowlist and replaces all values, including headers,
+GraphQL variables and file/body inputs. Command summaries are derived from
+the same bounded window. LRU capacity evictions have a separate counter; flush
+and explicit replacements do not masquerade as capacity evictions.
+
+Contention observed before a slot lock becomes coalescing only when the reply
+is a hit. Governor dispatch owners carry an optional evidence handle across
+blocking execution, so a request may report its managed logical operations.
+Batched PR subscribers explicitly mark attribution unknown: a sentinel count
+alone cannot pretend to include a separate batch-worker dispatch. No per-row
+redirect, subprocess-internal HTTP or exact point accounting is asserted.
+
+Ledger/dashboard routes use the existing loopback authentication, no-store and
+restrictive CSP. HTML escapes the JSON snapshot and contains no script or
+management controls. Any Origin-bearing non-GET is rejected before mutation
+routing, including stop/flush. Unauthenticated requests remain outside logs.
+
+Core replay reads at most 16 MiB, validates schema/record/hash/time/source
+fields, and models at most 4096 exact request keys. It has no identity or
+client invocation and therefore cannot auto-start a daemon or resolve gh auth.
+It records the input BLAKE3 digest and supplied TTL. Eligibility also excludes scoped controls, authoritative snapshots and forced
+REST reads/rate introspection. The model clears retention at recorded writes
+or unknown operations, then excludes writes, unknown operations, stale
+and refused records, infers no relation between different opaque keys, and
+labels its fixed-TTL/completion-order assumptions and omitted write/origin
+policy. Unknown dispatch rows keep observed totals null and point savings
+remain unknown. This is a bounded scenario tool, not a provider-budget proof.

@@ -474,3 +474,43 @@ A stale endpoint can be replaced by `daemon start` after ownership is free.
 Preserve private state when investigating interrupted publication/uncertain
 writes; flush/restart deliberately cannot erase that evidence or claim an
 unknown upstream mutation succeeded.
+
+## Private diagnostics and offline replay
+
+`ghd ledger` exports schema-v1 JSON for the latest 256 daemon-managed read
+requests (and explicitly marked GraphQL writes). Rows distinguish safe command labels, hashed callers, hits, misses,
+coalescing, conditional 304, stale planning and refusals, with response payload
+bytes and latency in microseconds. The export includes LRU eviction count,
+window command totals, capacity and dropped-row count. `ghd stats` includes
+the ledger summary alongside existing provider observations/governor metrics.
+An opaque request hash supports conservative exact-request comparison; it
+does not reveal repository names or prove semantic resource equivalence.
+
+Raw arguments and response bodies are never logged. `GHD_LOG_ARGS=1` (also a
+0/1 config-file key) opts into bounded flag-name capture: all argument values,
+headers, variables, input paths and unrecognized tokens remain `[redacted]`.
+The ledger is in memory only and resets on restart. Requests rejected before
+authentication/routing, native passthrough and external gh work are outside it.
+Managed dispatch counts are logical operations, not exact HTTP hops or point
+costs; unassigned batch work is null/unknown, not zero.
+
+`ghd dashboard` prints a read-only HTML snapshot of the same evidence. The
+loopback `/v1/dashboard` and `/v1/ledger` endpoints require the existing private
+bearer/identity authentication, prohibit framing and disable storage/scripts.
+They do not expose a token in a URL or open a public listener. Management
+routes reject Origin-bearing writes; the dashboard has no mutation controls.
+
+```bash
+ghd ledger > workload.json
+ghd replay workload.json --ttl 2000
+```
+
+Replay never contacts gh, GitHub or the daemon. It accepts a regular JSON file
+up to 16 MiB and 4096 records, with a TTL up to one day. Writes, forced/bypass reads and stale/refused output are excluded from modeled
+reuse; recorded writes clear modeled retention. It reports the input
+BLAKE3 digest, eligible records, modeled exact-key hits/logical origin reads,
+known observed dispatches and unknown records. Provider points saved remain
+null. The model assumes completion-time order and a fixed supplied TTL; it
+does not infer sharing between different hashes or simulate mutations, origin
+cache policy or work outside the bounded export. Treat output as a workload
+scenario, not measured quota savings or a TTL recommendation.

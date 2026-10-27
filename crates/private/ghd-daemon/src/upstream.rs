@@ -148,6 +148,8 @@ impl Upstream {
         number: u64,
         fields: &BTreeSet<String>,
     ) -> Result<Fields, String> {
+        // Batch dispatch belongs to a separate first-owner worker, not each subscriber.
+        crate::ledger::unknown_dispatches();
         let capacity = async_engine::timeout(Duration::from_secs(1), self.batch_permits.acquire())
             .await
             .map_err(|_| "GraphQL batch capacity is busy; retry".to_string())?;

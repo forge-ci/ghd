@@ -27,13 +27,14 @@ pub fn parse(bytes: &[u8]) -> io::Result<BTreeMap<String, String>> {
                 | "GHD_RATE_RESERVE"
                 | "GHD_CACHE_SETTLED_MS"
                 | "GHD_CACHE_DISK"
+                | "GHD_LOG_ARGS"
         ) {
             let number = match value {
                 Value::Unsigned(number) => number,
                 Value::Signed(number) => u64::try_from(number).map_err(|_| invalid())?,
                 _ => return Err(invalid()),
             };
-            if key == "GHD_CACHE_DISK" && number > 1 {
+            if matches!(key.as_str(), "GHD_CACHE_DISK" | "GHD_LOG_ARGS") && number > 1 {
                 return Err(invalid());
             }
             number.to_string()
@@ -70,10 +71,11 @@ pub fn validate() -> io::Result<()> {
         "GHD_RATE_RESERVE",
         "GHD_CACHE_SETTLED_MS",
         "GHD_CACHE_DISK",
+        "GHD_LOG_ARGS",
     ] {
         if let Some(value) = value(name)? {
             let number = value.parse::<u64>().map_err(|_| invalid())?;
-            if name == "GHD_CACHE_DISK" && number > 1 {
+            if matches!(name, "GHD_CACHE_DISK" | "GHD_LOG_ARGS") && number > 1 {
                 return Err(invalid());
             }
         }

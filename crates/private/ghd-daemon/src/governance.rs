@@ -160,6 +160,7 @@ impl Control {
                             reservation: Some(reservation),
                             who: caller(),
                             event,
+                            evidence: crate::ledger::capture(),
                             started: false,
                             completed: false,
                             _routine: routine,
@@ -241,6 +242,7 @@ pub(crate) struct Dispatch {
     reservation: Option<Reservation>,
     who: String,
     event: Event,
+    evidence: Option<crate::ledger::Capture>,
     started: bool,
     completed: bool,
     _routine: Option<SemaphorePermit>,
@@ -261,6 +263,9 @@ impl Dispatch {
 
     pub(crate) fn start(&mut self) {
         self.started = true;
+        if let Some(evidence) = &self.evidence {
+            evidence.dispatched();
+        }
         self.control.event(&self.who, self.event);
     }
     pub(crate) fn complete(mut self, status: u16, headers: &str, body: &[u8]) -> io::Result<()> {

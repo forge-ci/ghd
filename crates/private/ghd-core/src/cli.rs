@@ -14,7 +14,8 @@ usage:
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
   ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
   ghd snapshot -R owner/repo [--fresh|--allow-stale] repository planning snapshot
-  ghd stats                                           what the daemon saved
+  ghd stats | ledger | dashboard                       private diagnostics
+  ghd replay FILE --ttl MS                             offline exact-key model
   ghd daemon [start|stop|restart|status]                foreground or lifecycle
   ghd cache stats|keys|flush                           inspect or invalidate
   ghd [--no-cache] [--ttl MS] gh <read args...>         per-request cache control
@@ -48,6 +49,8 @@ fn run_inner(args: &[String]) -> io::Result<()> {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
+        ["ledger" | "dashboard"] => crate::operations::run(&args),
+        ["replay", rest @ ..] => crate::diagnostics::run(rest),
         ["daemon", rest @ ..] if !rest.is_empty() => crate::operations::run(rest),
         ["cache", rest @ ..] => {
             let mut words = vec!["cache"];

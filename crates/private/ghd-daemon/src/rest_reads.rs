@@ -149,6 +149,9 @@ pub async fn run(
     let _admission = crate::retention::admit(state).await?;
     let key = crate::retention::key("rest", gh_reads::key(request, plan).as_bytes());
     let slot = crate::retention::rest(state, &key).await;
+    if slot.try_lock().is_err() {
+        crate::ledger::waited();
+    }
     let mut retained = slot.lock().await;
     let mut entry = retained.take();
     if entry.is_none() {

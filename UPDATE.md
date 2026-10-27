@@ -183,3 +183,13 @@ references removed concepts is worse than no procedure.
   route. Bypass neither reads nor publishes shared/durable bodies.
 - Add bounded, typed owner-private JSON configuration with environment
   precedence, explicit invalid-input failures and per-user service guidance.
+
+## ghx parity: bounded diagnostics, dashboard and replay (#15)
+
+- Add a 256-row in-memory ledger and command summaries, with hashed callers,
+  outcomes, latency, payload size, eviction/drop counts and explicit unknown
+  dispatch attribution. Optional flag capture still redacts every value.
+- Add authenticated read-only loopback ledger/HTML routes and cross-origin
+  write rejection, without exposing credentials in dashboard URLs.
+- Add bounded, network-free exact-key replay with input digest/provenance,
+  explicit model assumptions and unknown provider-point savings.

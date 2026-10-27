@@ -21,6 +21,11 @@ pub struct Entry {
 }
 
 fn reply(status: u16, response: GhReadResponse) -> Response {
+    crate::ledger::answer(
+        &response.source,
+        response.stdout.len().saturating_add(response.stderr.len()),
+        status == 200 && response.error.is_empty(),
+    );
     Response::new(status, response.encode_to_vec())
         .and_then(|response| response.with_header("content-type", "application/x-protobuf"))
         .unwrap_or_default()
@@ -112,6 +117,9 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
     let _admission = crate::retention::admit(state).await?;
     let key = crate::retention::key("gh", key(request, &plan).as_bytes());
     let slot = crate::retention::gh(state, &key).await;
+    if slot.try_lock().is_err() {
+        crate::ledger::waited();
+    }
     let mut retained = slot.lock().await;
     let mut entry = retained.take();
     if entry.is_none() {

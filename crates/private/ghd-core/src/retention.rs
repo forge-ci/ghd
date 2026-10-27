@@ -9,6 +9,7 @@ pub struct Cache<V> {
     entries: HashMap<String, (V, usize)>,
     order: VecDeque<String>,
     bytes: usize,
+    evictions: u64,
     max_entries: usize,
     max_bytes: usize,
 }
@@ -19,6 +20,7 @@ impl<V> Cache<V> {
             entries: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
+            evictions: 0,
             max_entries,
             max_bytes,
         }
@@ -42,6 +44,7 @@ impl<V> Cache<V> {
                 break;
             };
             self.remove(&oldest);
+            self.evictions = self.evictions.saturating_add(1);
         }
         self.bytes += weight;
         self.order.push_back(key.clone());
@@ -68,6 +71,10 @@ impl<V> Cache<V> {
                 .get(key)
                 .map(|(value, _)| (key.as_str(), value))
         })
+    }
+
+    pub fn evictions(&self) -> u64 {
+        self.evictions
     }
 
     pub fn usage(&self) -> (usize, usize) {

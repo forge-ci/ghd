@@ -59,6 +59,7 @@ pub(crate) type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
 
 pub(crate) struct State {
     token: String,
+    pub(crate) ledger: crate::ledger::Ledger,
     pub(crate) lifecycle: Arc<crate::operations::Lifecycle>,
     identity_key: String,
     pub(crate) host: String,
@@ -91,6 +92,7 @@ pub(crate) fn new_state(
     let disk = crate::persistence::open(identity, journal.clone())?;
     Ok(State {
         disk,
+        ledger: crate::ledger::Ledger::new()?,
         lifecycle: Arc::default(),
         policy,
         token,
@@ -190,6 +192,9 @@ async fn route(state: &State, request: Request) -> Response {
     if !authorized || !same_identity {
         return text(401, "unauthorized");
     }
+    if request.method() != "GET" && request.header("origin").is_some() {
+        return text(403, "cross-origin writes are forbidden");
+    }
     if request.path() == "/v1/admin/stop" && request.method() == "POST" {
         return crate::operations::stop(state).await;
     }
@@ -241,12 +246,12 @@ async fn route(state: &State, request: Request) -> Response {
                     ("GET", "/v1/stats") => stats(state).await,
                     ("GET", "/v1/admin/keys") => crate::operations::keys(state).await,
                     ("POST", "/v1/admin/flush") => crate::operations::flush(state).await,
-                    ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
-                    ("POST", "/v1/graphql") => graphql(state, request.body()).await,
-                    ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
-                    ("POST", "/v2/snapshot") => {
-                        crate::snapshots::handle(state, request.body()).await
-                    }
+                    ("GET", "/v1/ledger") => crate::ledger::report(state, false).await,
+                    ("GET", "/v1/dashboard") => crate::ledger::report(state, true).await,
+                    (
+                        "POST",
+                        route @ ("/v1/pr/view" | "/v1/graphql" | "/v1/read/gh" | "/v2/snapshot"),
+                    ) => crate::ledger::track(state, &request, route).await,
                     _ => text(404, "no such route"),
                 }
             }),
@@ -259,6 +264,11 @@ fn text(status: u16, body: &str) -> Response {
 }
 
 fn reply(status: u16, message: &PrViewResponse) -> Response {
+    crate::ledger::answer(
+        &message.source,
+        message.json.len(),
+        status == 200 && message.error.is_empty(),
+    );
     Response::new(status, message.encode_to_vec())
         .and_then(|r| r.with_header("content-type", "application/x-protobuf"))
         .unwrap_or_default()
@@ -274,7 +284,7 @@ fn failure(status: u16, error: String) -> Response {
     )
 }
 
-async fn pr_view(state: &State, body: &[u8]) -> Response {
+pub(crate) async fn pr_view(state: &State, body: &[u8]) -> Response {
     let Ok(req) = PrViewRequest::decode(body) else {
         return failure(400, "malformed request".into());
     };
@@ -316,6 +326,9 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
         &format!("{}/{}/{}", req.owner, req.repo, req.number).into_bytes(),
     );
     let slot = crate::retention::pr(state, &key).await;
+    if slot.try_lock().is_err() {
+        crate::ledger::waited();
+    }
     let mut retained = slot.lock().await;
     let mut entry = retained.take();
     if entry.is_none() {
@@ -463,6 +476,11 @@ async fn read(
 }
 
 fn graphql_reply(status: u16, message: &GraphqlResponse) -> Response {
+    crate::ledger::answer(
+        &message.source,
+        message.json.len(),
+        status == 200 && message.error.is_empty(),
+    );
     Response::new(status, message.encode_to_vec())
         .and_then(|r| r.with_header("content-type", "application/x-protobuf"))
         .unwrap_or_default()
@@ -542,7 +560,7 @@ async fn graphql_write(state: &State, upstream_body: &[u8]) -> Response {
     }
 }
 
-async fn graphql(state: &State, body: &[u8]) -> Response {
+pub(crate) async fn graphql(state: &State, body: &[u8]) -> Response {
     let Ok(req) = GraphqlRequest::decode(body) else {
         return graphql_failed(400, "malformed request".into());
     };
@@ -576,6 +594,9 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     let key = crate::retention::key("graphql", &upstream_body);
     let slot = crate::retention::graphql(state, &key).await;
     // One lock per query: concurrent identical calls wait for the first.
+    if slot.try_lock().is_err() {
+        crate::ledger::waited();
+    }
     let mut entry = slot.lock().await;
     if let Some((json, at)) = entry.as_ref()
         && at.elapsed()
@@ -622,6 +643,13 @@ async fn stats(state: &State) -> Response {
     let (entries, bytes) = state.retained.lock().await.usage();
     doc.insert("cache_entries".into(), Value::Unsigned(entries as u64));
     doc.insert("cache_charged_bytes".into(), Value::Unsigned(bytes as u64));
+    let evictions = state.retained.lock().await.evictions();
+    match state.ledger.summary(evictions) {
+        Ok(summary) => {
+            doc.insert("ledger".into(), summary);
+        }
+        Err(error) => return text(500, &error.to_string()),
+    }
     doc.insert("reads".into(), n(&state.reads));
     doc.insert("served_fresh".into(), n(&state.fresh));
     doc.insert("sentinel_304_free".into(), n(&c.sentinel_304));

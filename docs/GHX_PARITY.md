@@ -25,7 +25,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #12 | Shared rate governor and cooldown | Implemented and locally verified; draft PR #18 |
 | #13 | Repository snapshots and authority freshness | Implemented and locally verified; draft PR #18 |
 | #14 | Daemon/cache operations and configuration | Implemented and locally verified; draft PR #18 |
-| #15 | Diagnostics, dashboard and replay | Pending |
+| #15 | Diagnostics, dashboard and replay | Implemented and locally verified; draft PR #18 |
 | #16 | Agent plugin and managed gh distribution | Pending |
 | #17 | Standing upstream inspection list | Existing assigned tracker; final reconciliation pending |
 
@@ -370,3 +370,24 @@ it and controlled snapshots now use v3. Final `./ci.py all` passes every gate
 and 170 Python cases, including all seven operations tests. Read-only review is
 clean after the fix; precheck retains zero violations and 17 local review items.
 Native lifecycle verification awaits the feature push.
+
+## Bounded diagnostics and offline replay (#15)
+
+The in-memory request ring retains safe command/caller labels, cache outcomes,
+latency/size, eviction/drop counts and conservative dispatch attribution.
+Opt-in capture still replaces all values, headers, variables and input paths.
+Authenticated HTML/JSON views use the existing loopback endpoint; management
+writes with Origin are rejected. Offline replay is bounded and exact-key-only,
+with input digest and explicit fixed-TTL/model assumptions. Unknown dispatches
+and provider points are never invented.
+
+The retained two-case RED demonstrates absent ledger/replay surfaces. Focused
+cases cover ordinary hit/miss, coalescing/callers, redacted bounded capture,
+304/refusal/eviction, dashboard authentication/cross-origin refusal and offline
+model provenance. Review exposed modeled mutation reuse (retained RED: one
+modeled hit versus expected zero); explicit kind/eligibility now excludes
+writes. A further authority RED reproduces the same error for forced fresh
+reads; those and scoped/forced REST controls are now ineligible. Recorded writes
+clear modeled retention without inferring resource relationships.
+Final `./ci.py all` passes all gates and 179 Python cases. Read-only review is
+clean; precheck has zero violations and 17 existing local review items.

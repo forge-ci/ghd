@@ -58,6 +58,21 @@ pub fn run(args: &[&str]) -> io::Result<()> {
                 }
             );
         }
+        [command @ ("ledger" | "dashboard")] => {
+            let path = if *command == "ledger" {
+                "/v1/ledger"
+            } else {
+                "/v1/dashboard"
+            };
+            let (status, body) = existing(&identity, "GET", path)?;
+            if status != 200 {
+                return Err(io::Error::other(
+                    "diagnostics unsupported; restart after upgrading",
+                ));
+            }
+            io::stdout().lock().write_all(&body)?;
+            println!();
+        }
         ["cache", command @ ("keys" | "flush" | "stats")] => {
             let (method, path) = match *command {
                 "flush" => ("POST", "/v1/admin/flush"),
