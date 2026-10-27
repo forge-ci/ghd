@@ -159,7 +159,8 @@ unsupported field failures, real gh jq/template rendering and cleanup. A local
 mock GitHub transport compares the installed real gh with cached CLI and
 Python output for the main PR/issue/run JSON shapes, including pending checks.
 The real-gh transport comparison runs on Unix hosts with gh installed; the
-synthetic cache tests run on every declared platform. No live GitHub answers
+synthetic cache tests are portable across declared platforms; native Python
+integration execution is selected explicitly with ci-test-integration. No live GitHub answers
 or performance claims are used as test evidence.
 
 The first implementation passes the issue-projection RED regression and the
@@ -233,3 +234,33 @@ cross-builds pass; native tests report a write-journal failure and hang in the
 lost-reply fixture until job cancellation. Native Windows validation remains
 incomplete. The next correction addresses those foundation failures before
 full-goal delivery; no Windows success is inferred from the local Linux run.
+
+The Windows correction uses the private reader's matching directory/file
+custody APIs. General directory creation does not replace an elevated token's
+Administrators default owner; the strict reader requires TokenUser ownership.
+The IPC owner-private directory helper repairs that ownership, and private
+file creation assigns it on the exact file handle. A common read/replace/read
+regression covers both publications. The lost-reply fixture now bounds accept
+and request reads and reports child stdout/stderr before a server failure,
+so an endpoint failure cannot conceal diagnostics behind an unbounded join.
+Native Windows verification of this correction is pending the next push.
+
+The directory check also runs for existing Linux/macOS state directories.
+The regression starts with an ordinary existing directory, enforces the
+strict owner-private contract, and verifies private read/replace/read behavior.
+Creation alone is not treated as validation of an existing path.
+
+Review found that exclusive private-file creation cannot reuse a fixed legacy
+.tmp path after interruption. Each publication now uses an exclusively owned
+kernel temporary directory on the target filesystem, with private ownership,
+close-before-rename and cleanup on success/error. The readback regression also
+starts with an owned leftover .tmp, proves it remains untouched, and checks
+that fresh staging directories are cleaned. This policy is mirrored across
+native adapters rather than weakening either platform's read validator.
+
+The corrected private-state tree passes `./ci.py all`: all Rust suites,
+122 installed Python tests, backend wheel smoke and action gates. The new
+existing-directory/leftover-stage/failure-cleanup regression passes. Read-only
+clud-review is clean. Contract precheck reports zero violations with the
+existing 17 local-only needs-review checks retained. The next hosted run selects
+native Windows/macOS integration coverage as well as the required routine jobs.

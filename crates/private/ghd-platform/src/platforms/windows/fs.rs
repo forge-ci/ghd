@@ -13,15 +13,24 @@ pub(crate) fn state_base() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
-    // Delegate ownership/DACL enforcement to the existing native facade.
-    // In particular a GHD_STATE_DIR override need not inherit profile ACLs.
-    kernal_api::platform::fs::create_dir_all_private(dir)
+    // The strict reader requires TokenUser ownership too. General filesystem
+    // creation alone can retain an elevated token's Administrators owner.
+    kernal_api::platform::fs::create_dir_all_private(dir)?;
+    kernal_api::platform::ipc::ensure_owner_private_directory(dir)?;
+    Ok(())
 }
 
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut file = fs::File::create(&tmp)?;
+    // Deliberately shared publication policy across the native adapters;
+    // kernel primitives enforce each host's private ownership and permissions.
+    let parent = path.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "private state file needs a parent"))?;
+    let stage = kernal_api::platform::fs::TemporaryDirectory::in_directory(parent, ".ghd-write-")?;
+    create_private_dir(stage.path())?;
+    let staged = stage.path().join("data");
+    let mut file = kernal_api::platform::fs::create_private_file(&staged)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    fs::rename(tmp, path)
+    drop(file);
+    fs::rename(&staged, path)?;
+    stage.close()
 }

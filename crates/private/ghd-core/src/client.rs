@@ -218,8 +218,27 @@ mod tests {
             format!("{port} session").as_bytes(),
         )
         .expect("endpoint");
+        listener.set_nonblocking(true).expect("bounded accept");
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture client did not connect before deadline: {error}"),
+                }
+            };
+            stream
+                .set_nonblocking(false)
+                .expect("blocking request reader");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("bounded request read");
             let mut received = Vec::new();
             let mut buffer = [0; 512];
             while !received.ends_with(b"fixture-dispatch-body") {
@@ -244,12 +263,14 @@ mod tests {
             .env("GHD_EXE", root.join("must-not-be-started"))
             .output()
             .expect("child");
-        server.join().expect("server");
+        let server_result = server.join();
         assert!(
             output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
+        server_result.expect("server");
         assert!(
             !directory.join("daemon.log").exists(),
             "no fallback daemon was started"

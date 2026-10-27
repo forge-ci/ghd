@@ -17,4 +17,4 @@ name = "ghd_platform"
 doctest = false
 
 [dependencies]
-kernal-api = { workspace = true, features = ["fs"] }
+kernal-api = { workspace = true, features = ["fs", "ipc"] }

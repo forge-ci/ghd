@@ -119,3 +119,12 @@ references removed concepts is worse than no procedure.
   never substitute an old authoritative body after upstream failure.
 - Keep rate-limit introspection fresh and report HTTP operations/responses,
   revalidations and provider quota observations as separate measurements.
+
+## Windows private-state correction
+
+- Pair strict private-file reads with current-user directory ownership and
+  explicit private-file creation, including elevated Windows tokens.
+- Close the staged file before replacement and enforce private ownership on
+  renderer configuration directories.
+- Bound the lost-reply test server and expose child diagnostics promptly;
+  retain its requirement that dispatched operations are never replayed.

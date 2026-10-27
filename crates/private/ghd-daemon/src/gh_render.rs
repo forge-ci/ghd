@@ -11,16 +11,8 @@ use kernal_api::{
 };
 use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-struct RenderDirectory(PathBuf);
-impl Drop for RenderDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 pub async fn render(
     state: &State,
@@ -30,11 +22,11 @@ pub async fn render(
 ) -> io::Result<GhReadResponse> {
     let nonce = new_token().await?;
     crate::platform::fs::create_private_dir(&state.render_root)?;
-    let name =
-        kernal_api::hash::blake3_bytes(format!("ghd-render-directory-v1:{nonce}").as_bytes())
-            .to_hex();
-    let directory = RenderDirectory(state.render_root.join(name));
-    std::fs::create_dir(&directory.0)?;
+    // An owned short staging name is independent of the authentication nonce
+    // and avoids nesting a second 64-character digest in Windows state paths.
+    let directory =
+        kernal_api::platform::fs::TemporaryDirectory::in_directory(&state.render_root, ".render-")?;
+    crate::platform::fs::create_private_dir(directory.path())?;
     let server = Server::bind(
         SocketAddr::from(([127, 0, 0, 1], 0)),
         http_server::Limits::default(),
@@ -74,7 +66,7 @@ pub async fn render(
     if let Some(template) = &plan.template {
         args.extend(["--template".into(), template.clone()]);
     }
-    let spec = render_spec(request, &directory.0, &nonce, args);
+    let spec = render_spec(request, directory.path(), &nonce, args);
     let permit = state.gh_permits.acquire().await;
     // The blocking owner retains the directory until its child is reaped, even
     // if an HTTP caller disconnects while rendering is in progress.

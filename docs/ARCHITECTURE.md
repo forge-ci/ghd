@@ -258,3 +258,9 @@ Quota telemetry stores bounded provider bucket observations separately from
 logical HTTP dispatches and validated 304 reuse. It does not attribute shared
 provider totals to individual commands or claim to count internal redirect
 hops. `rate_limit` itself bypasses body reuse and records fresh observations.
+
+Windows state custody uses the owner-private directory API and private-file
+creation together. Both directory and file owners must be TokenUser, including
+under elevated tokens whose default owner may be Administrators. The reader
+continues to reject mismatched owners and ACLs; general filesystem directory
+privacy alone does not establish the stricter state-file contract.

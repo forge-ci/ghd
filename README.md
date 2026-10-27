@@ -220,6 +220,11 @@ up a daemon. Daemons, caches, startup locks and logs are partitioned by a
 cryptographic fingerprint of both values; raw tokens never appear in paths.
 Token rotation selects a new daemon. Existing legacy endpoint files are ignored.
 
+State directories and files enforce current-user ownership, including elevated
+Windows tokens. Existing directories are validated as well as newly created
+ones. Publication uses unique private stages and leaves interrupted legacy
+staging files untouched; stale stages cannot block a fresh write.
+
 Use `GH_HOST` to select a host, `ghd pr view 12 -R git.example.com/owner/repo
 --json state` to bind a repository host, or `ghd api graphql --hostname
 git.example.com -f 'query={viewer{login}}'`. `GH_REPO` supplies the default
