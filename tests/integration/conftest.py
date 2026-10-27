@@ -355,14 +355,24 @@ def start_fixture_daemon(
     ) as daemon:
         try:
             deadline = time.monotonic() + 10
+            last_error: OSError | None = None
             while True:
                 endpoints = list(state.glob("identities-v1/*/endpoint"))
-                if endpoints and endpoints[0].read_bytes() != previous:
+                try:
+                    ready = bool(endpoints) and endpoints[0].read_bytes() != previous
+                except (FileNotFoundError, PermissionError) as error:
+                    # Windows publication/delete sharing can briefly deny an
+                    # observer. The existing startup deadline still bounds it.
+                    last_error = error
+                    ready = False
+                if ready:
                     break
                 assert daemon.poll() is None, (
                     "fixture daemon exited before publishing an endpoint"
                 )
-                assert time.monotonic() < deadline, "fixture daemon startup timed out"
+                assert time.monotonic() < deadline, (
+                    f"fixture daemon startup timed out: {last_error}"
+                )
                 time.sleep(0.01)
             yield daemon
         finally:

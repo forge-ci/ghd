@@ -409,3 +409,20 @@ format/LOC checks. An unused-import lint from the initial run was removed;
 corrected clippy, Ruff and pylint pass. Precheck has zero violations and the
 same 17 review items; read-only review is clean. Full native verification is
 pending.
+
+The correction's [run40516857808](https://github.com/forge-ci/ghd/actions/runs/40516857808)
+confirmed concurrent lifecycle completion on Windows; it no longer hangs. Both
+Windows lanes still failed a config test because its parent state directory
+was not protected, and ARM64 exposed a transient endpoint-sharing read during
+fixture publication. The config now lives inside the fixture's already-private
+identity directory; startup observation retries only missing/sharing errors
+within the same deadline. Product custody checks and assertions stay intact.
+
+The broad ci-full tag also selected musl wheels on glibc native runners, which
+failed import. Musl wheel execution belongs to the existing release smoke flow.
+The next run explicitly selects Linux ARM64, Windows and macOS plus routine
+Linux x64 integration, preserving the six native OS/architecture lanes. The
+failed broad run is not reported as passed; the planner mismatch is tracked
+in [#19](https://github.com/forge-ci/ghd/issues/19). Local fixture correction
+passes `./ci.py all` with 179 Python cases, clean review and zero precheck
+violations (the same 17 local review items).

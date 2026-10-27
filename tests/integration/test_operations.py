@@ -88,7 +88,7 @@ def test_configuration_precedence_and_invalid_restart_preserve_custody(
     resource_cli: ResourceCli,
 ) -> None:
     invoke, trace = resource_cli
-    config = trace.parent / "state" / "ghd.json"
+    config = next((trace.parent / "state").glob("identities-v1/*")) / "ghd.json"
     config.write_text('{"GHD_FRESH_MS":0}', encoding="utf-8")
     config.chmod(0o600)
     args = ("issue", "view", "42", "-R", "o/r", "--json", "title")
