@@ -119,9 +119,9 @@ def cmd_python_test(_args: argparse.Namespace) -> int:
     """Sync (see `cmd_python_sync`), then run pytest against that
     installed artifact — not an in-place `cargo build`.
 
-    `-m "not integration"`: the `unit` suite never runs
-    `tests/integration/` (ci.toml `[suites].integration`, opt-in only —
-    see `cmd_integration_test` below and `tests/integration/README.md`).
+    `-m "not integration"` keeps the original marked end-to-end smoke
+    optional. Unmarked controlled cache tests retain routine unit coverage;
+    the selected integration lane additionally runs the entire directory.
     """
     rc = _run_isolated_soldr(["uv", "sync", "--frozen"])
     if rc != 0:
@@ -136,9 +136,7 @@ def cmd_integration_test(_args: argparse.Namespace) -> int:
     `[ci-full]`). Reuses the same `uv sync` editable install
     `cmd_python_test` already performed earlier in the same job — the
     fast lane never installs twice. See `tests/integration/README.md`."""
-    return _run(
-        ["uv", "run", "--no-sync", "pytest", "-m", "integration", "tests/integration"]
-    )
+    return _run(["uv", "run", "--no-sync", "pytest", "tests/integration"])
 
 
 def cmd_wheel_build(args: argparse.Namespace) -> int:

@@ -3,8 +3,8 @@
 The `integration` suite declared in `ci.toml`'s `[suites]` table
 (`suites.integration = { run = "pytest tests/integration" }`), added by
 [zackees/ci.yml#6](https://github.com/zackees/ci.yml/issues/6) round 3.
-Not required (`[suites].integration` has no `required = true`), and not
-run by default -- it runs only when a PR title selects it directly
+The whole directory is optional (`[suites].integration` has no
+`required = true`); that selection runs only when a PR title selects it directly
 (`[ci-test-integration]`) or transitively (`[ci-full]`, which selects
 every suite on every platform).
 
@@ -28,16 +28,20 @@ byte-identical -- not just "each individually looks right".
 
 ## Marker discipline
 
-Every test here carries `pytestmark = pytest.mark.integration`
-(registered in `pyproject.toml`'s `[tool.pytest.ini_options] markers`).
-This is what keeps the suite optional:
+The original cross-surface smoke tests carry `pytestmark =
+pytest.mark.integration` (registered in `pyproject.toml`). Controlled cache,
+REST, retention and governor tests remain unmarked so the ordinary fast lane
+continues to cover them on every PR. Selecting integration runs the entire
+directory against each selected native wheel:
 
 - The `unit` suite's `pytest` invocation (`ci/fast.py python-test`) adds
-  `-m "not integration"`, so these tests are collected but always
-  deselected there.
+  `-m "not integration"`, preserving ordinary cache coverage while the marked
+  cross-surface smoke cases remain opt-in.
 - The `integration` suite's own invocation (`ci/fast.py
   integration-test`, `ci/platform_run.py integration-test`) adds
-  `-m integration tests/integration` explicitly.
+  `tests/integration` explicitly, including marked and unmarked cases. The fast
+  lane may therefore repeat unmarked cases when integration is selected; this
+  keeps ordinary coverage intact while ensuring native coverage is complete.
 
 ## Where this runs
 
@@ -55,10 +59,13 @@ This is what keeps the suite optional:
 
 - **No mocks.** Same rule as `../README.md`: exercise the real installed
   artifact (extension + native binary), never a stand-in for either.
-- **Every assertion cross-checks two independently-built surfaces**
-  against each other, not against a hardcoded expected string -- a
-  version bump or a banner-format change should never require editing
-  this file.
-- Keep this directory's tests fast and few. It is a cross-boundary
-  smoke check, not a second copy of `../test_bindings.py`/`test_cli.py`'s
-  per-surface coverage.
+- The original smoke checks cross-check independently built CLI/Python
+  surfaces. Cache policy cases also assert exact bodies, statuses, upstream
+  dispatch traces and controlled concurrent/crash schedules.
+- Provider and real-gh fixtures are owned by each test and use local
+  transports. They never replace the installed ghd extension or executable,
+  contact live GitHub, or claim live performance/quota savings.
+- Real-gh Unix socket goldens skip explicitly where that transport is
+  unavailable; portable synthetic upstream cases still run there.
+- Keep runtime bounded and own/reap every daemon and child. State and
+  credentials belong to the fixture and are cleaned after each test.
