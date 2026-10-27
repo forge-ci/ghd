@@ -28,6 +28,11 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     crate::platform_imp::fs::write_private(path, bytes)
 }
 
+/// Create an owner-private file exactly once, failing if it exists.
+pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
+    kernal_api::platform::fs::create_private_file(path)
+}
+
 /// Read a bounded regular file only after validating native owner privacy.
 pub fn read_private_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     kernal_api::platform::fs::read_private_regular_file_bounded(path, max_bytes)

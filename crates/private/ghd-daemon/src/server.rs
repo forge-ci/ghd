@@ -18,49 +18,58 @@ use kernal_api::http_server::{self, Request, Response, Server};
 use kernal_api::json::{self, Layout, Value};
 use kernal_api::random::SecureRandom;
 use prost::Message;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_FRESH_FOR: Duration = Duration::from_secs(2);
 
 /// How long a validated entry is served without asking GitHub at all:
 /// `GHD_FRESH_MS` when set (read once at startup), else 2 s.
-fn fresh_for() -> Duration {
-    static FRESH: OnceLock<Duration> = OnceLock::new();
-    *FRESH.get_or_init(|| {
-        std::env::var("GHD_FRESH_MS")
-            .ok()
-            .and_then(|ms| ms.parse().ok())
-            .map_or(DEFAULT_FRESH_FOR, Duration::from_millis)
-    })
+fn fresh_for() -> io::Result<Duration> {
+    match std::env::var("GHD_FRESH_MS") {
+        Ok(value) => value
+            .parse::<u64>()
+            .map(Duration::from_millis)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "GHD_FRESH_MS must be a nonnegative integer",
+                )
+            }),
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_FRESH_FOR),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "GHD_FRESH_MS must be a nonnegative integer",
+        )),
+    }
 }
 const BATCH_WINDOW: Duration = Duration::from_millis(50);
 
-struct Entry {
-    etag: Option<String>,
-    fields: Fields,
-    validated: Instant,
+pub(crate) struct Entry {
+    pub(crate) etag: Option<String>,
+    pub(crate) fields: Fields,
+    pub(crate) validated: Option<Instant>,
+    pub(crate) ttl: Duration,
 }
 
-type Slot = Arc<Mutex<Option<Entry>>>;
+pub(crate) type Slot = Arc<Mutex<Option<Entry>>>;
 
 /// A cached `api graphql` answer: the response body and when it was fetched.
-type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
-
-/// Past this many cached queries, stale ones are dropped on insert.
-const GRAPHQL_CACHE_MAX: usize = 4096;
+pub(crate) type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
 
 pub(crate) struct State {
     token: String,
     identity_key: String,
     pub(crate) host: String,
     upstream: Arc<Upstream>,
-    cache: Mutex<HashMap<(String, String, u64), Slot>>,
-    graphql: Mutex<HashMap<Vec<u8>, GraphqlSlot>>,
+    pub(crate) policy: ghd_core::cache_policy::Policy,
+    pub(crate) disk: Option<Arc<ghd_core::durable::Store>>,
+    pub(crate) retained: crate::retention::Cache,
+    pub(crate) read_permits: kernal_api::async_engine::Semaphore,
     graphql_fresh: AtomicU64,
     reads: AtomicU64,
     fresh: AtomicU64,
@@ -69,8 +78,6 @@ pub(crate) struct State {
     pub(crate) journal: ghd_core::coherence::Journal,
     cache_epoch: Mutex<u64>,
     pub(crate) github_token: String,
-    pub(crate) gh_reads: crate::gh_reads::Cache,
-    pub(crate) rest_reads: crate::rest_reads::Cache,
     pub(crate) rest_counters: crate::rest_reads::Counters,
     pub(crate) gh_permits: kernal_api::async_engine::Semaphore,
     pub(crate) render_root: std::path::PathBuf,
@@ -80,23 +87,26 @@ pub(crate) fn new_state(
     identity: &ghd_core::identity::Identity,
     token: String,
 ) -> io::Result<State> {
+    let journal = ghd_core::coherence::Journal::global()?;
+    let policy = ghd_core::cache_policy::Policy::from_environment()?;
+    let disk = crate::persistence::open(identity, journal.clone())?;
     Ok(State {
+        disk,
+        policy,
         token,
         identity_key: identity.key().to_string(),
         host: identity.host().to_string(),
         upstream: Arc::new(Upstream::new(identity, BATCH_WINDOW)?),
-        cache: Mutex::new(HashMap::new()),
-        graphql: Mutex::new(HashMap::new()),
+        retained: crate::retention::new()?,
+        read_permits: kernal_api::async_engine::Semaphore::new(32),
         graphql_fresh: AtomicU64::new(0),
         reads: AtomicU64::new(0),
         fresh: AtomicU64::new(0),
         started: Instant::now(),
-        fresh_for: fresh_for(),
-        journal: ghd_core::coherence::Journal::global()?,
+        fresh_for: fresh_for()?,
+        journal,
         cache_epoch: Mutex::new(0),
         github_token: identity.token().to_string(),
-        gh_reads: Mutex::new(HashMap::new()),
-        rest_reads: Mutex::new(HashMap::new()),
         rest_counters: crate::rest_reads::Counters::default(),
         gh_permits: kernal_api::async_engine::Semaphore::new(4),
         render_root: endpoint::directory(identity)?.join("renders"),
@@ -112,10 +122,7 @@ async fn sync_epoch(state: &State, epoch: u64) -> io::Result<()> {
         ));
     }
     if *current != epoch {
-        state.cache.lock().await.clear();
-        state.graphql.lock().await.clear();
-        state.gh_reads.lock().await.clear();
-        state.rest_reads.lock().await.clear();
+        state.retained.lock().await.clear();
         *current = epoch;
     }
     Ok(())
@@ -172,7 +179,7 @@ async fn route(state: &State, request: Request) -> Response {
     }
     match (request.method(), request.path()) {
         ("GET", "/v1/health") => text(200, "ok"),
-        ("GET", "/v1/stats") => stats(state),
+        ("GET", "/v1/stats") => stats(state).await,
         ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
         ("POST", "/v1/graphql") => graphql(state, request.body()).await,
         ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
@@ -233,19 +240,40 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
         Err(error) => return failure(409, error.to_string()),
     };
     state.reads.fetch_add(1, Ordering::Relaxed);
-    let slot = {
-        let mut cache = state.cache.lock().await;
-        Arc::clone(
-            cache
-                .entry((req.owner.clone(), req.repo.clone(), req.number))
-                .or_default(),
-        )
+    let _admission = match crate::retention::admit(state).await {
+        Ok(permit) => permit,
+        Err(error) => return failure(429, error.to_string()),
     };
-    let mut entry = slot.lock().await;
+    let key = crate::retention::key(
+        "pr",
+        &format!("{}/{}/{}", req.owner, req.repo, req.number).into_bytes(),
+    );
+    let slot = crate::retention::pr(state, &key).await;
+    let mut retained = slot.lock().await;
+    let mut entry = retained.take();
+    if entry.is_none() {
+        match crate::persistence::restore_pr(state, &key, epoch).await {
+            Ok(restored) => entry = restored,
+            Err(error) => return failure(409, error.to_string()),
+        }
+    }
     let result = read(state, &req, &wanted, &mut entry).await;
+    if let Err(error) = retain_pr(
+        state,
+        &key,
+        &slot,
+        &mut entry,
+        epoch,
+        result.as_ref().is_ok_and(|(_, source)| *source != "fresh"),
+    )
+    .await
+    {
+        return failure(409, error.to_string());
+    }
     if let Err(error) = state.journal.confirm(epoch) {
         return failure(409, error.to_string());
     }
+    *retained = entry;
     match result {
         Ok((fields, source)) => {
             let doc: BTreeMap<String, Value> = wanted
@@ -268,6 +296,39 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
     }
 }
 
+async fn retain_pr(
+    state: &State,
+    key: &str,
+    slot: &Slot,
+    entry: &mut Option<Entry>,
+    epoch: u64,
+    persist: bool,
+) -> io::Result<()> {
+    let weight = entry.as_ref().map_or(0, |entry| {
+        json::encode(&Value::Object(entry.fields.clone()), Layout::Compact)
+            .map_or(usize::MAX, |bytes| bytes.len().saturating_mul(64))
+            .saturating_add(entry.etag.as_ref().map_or(0, String::len))
+    });
+    if !crate::retention::reserve(
+        state,
+        key,
+        crate::retention::CachedSlot::Pr(Arc::clone(slot)),
+        weight,
+    )
+    .await
+    {
+        *entry = None;
+    }
+    if persist {
+        if let Some(entry) = entry {
+            crate::persistence::save_pr(state, key, epoch, entry).await?;
+        } else {
+            crate::persistence::forget(state, key, epoch).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn read(
     state: &State,
     req: &PrViewRequest,
@@ -275,10 +336,16 @@ async fn read(
     entry: &mut Option<Entry>,
 ) -> Result<(Fields, &'static str), String> {
     let covers = |e: &Entry| wanted.iter().all(|f| e.fields.contains_key(f));
-    if let Some(e) = entry
-        .as_ref()
-        .filter(|e| covers(e) && e.validated.elapsed() < state.fresh_for)
-    {
+    if let Some(e) = entry.as_ref().filter(|e| {
+        covers(e)
+            && e.validated.is_some_and(|at| {
+                at.elapsed()
+                    < state
+                        .policy
+                        .command("pr", "view", state.fresh_for)
+                        .min(e.ttl)
+            })
+    }) {
         state.fresh.fetch_add(1, Ordering::Relaxed);
         return Ok((e.fields.clone(), "fresh"));
     }
@@ -289,7 +356,7 @@ async fn read(
         .as_ref()
         .filter(|e| covers(e))
         .and_then(|e| e.etag.clone());
-    let (status, etag) = state
+    let (status, etag, policy) = state
         .upstream
         .sentinel(&path, cached_etag.as_deref())
         .await
@@ -297,8 +364,15 @@ async fn read(
     if status == 304
         && let Some(e) = entry.as_mut()
     {
-        e.validated = Instant::now();
-        return Ok((e.fields.clone(), "revalidated"));
+        e.validated = Some(Instant::now());
+        if policy.specified {
+            e.ttl = policy.ttl;
+        }
+        let fields = e.fields.clone();
+        if !policy.store {
+            *entry = None;
+        }
+        return Ok((fields, "revalidated"));
     }
     if status != 200 && status != 304 {
         return Err(format!("GitHub returned HTTP {status} for {path}"));
@@ -312,10 +386,11 @@ async fn read(
         .upstream
         .pull_request(&req.owner, &req.repo, req.number, &select)
         .await?;
-    *entry = Some(Entry {
+    *entry = policy.store.then_some(Entry {
         etag,
         fields: fields.clone(),
-        validated: Instant::now(),
+        validated: Some(Instant::now()),
+        ttl: policy.ttl,
     });
     Ok((fields, "fetched"))
 }
@@ -386,10 +461,7 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
             Ok(intent) => intent,
             Err(error) => return failed(409, error.to_string()),
         };
-        state.cache.lock().await.clear();
-        state.graphql.lock().await.clear();
-        state.gh_reads.lock().await.clear();
-        state.rest_reads.lock().await.clear();
+        state.retained.lock().await.clear();
         return match state.upstream.graphql_raw(&upstream_body).await {
             Ok((status, json)) => {
                 if status < 500
@@ -407,17 +479,16 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
         Ok(epoch) => epoch,
         Err(error) => return failed(409, error.to_string()),
     };
-    let slot = {
-        let mut cache = state.graphql.lock().await;
-        if cache.len() >= GRAPHQL_CACHE_MAX {
-            cache.retain(|_, slot| Arc::strong_count(slot) > 1);
-        }
-        Arc::clone(cache.entry(upstream_body.clone()).or_default())
+    let _admission = match crate::retention::admit(state).await {
+        Ok(permit) => permit,
+        Err(error) => return failed(429, error.to_string()),
     };
+    let key = crate::retention::key("graphql", &upstream_body);
+    let slot = crate::retention::graphql(state, &key).await;
     // One lock per query: concurrent identical calls wait for the first.
     let mut entry = slot.lock().await;
     if let Some((json, at)) = entry.as_ref()
-        && at.elapsed() < state.fresh_for
+        && at.elapsed() < state.policy.command("api", "graphql", state.fresh_for)
     {
         state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
         return match state.journal.confirm(epoch) {
@@ -431,7 +502,16 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
                 return failed(409, error.to_string());
             }
             // Only a clean answer is reused; errors (rate limits) are not.
-            if status == 200 && gql::errors(&json).is_none() {
+            if status == 200
+                && gql::errors(&json).is_none()
+                && crate::retention::reserve(
+                    state,
+                    &key,
+                    crate::retention::CachedSlot::Graphql(Arc::clone(&slot)),
+                    json.len(),
+                )
+                .await
+            {
                 *entry = Some((json.clone(), Instant::now()));
             }
             graphql_http_answer(status, json, "fetched")
@@ -440,7 +520,7 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     }
 }
 
-fn stats(state: &State) -> Response {
+async fn stats(state: &State) -> Response {
     let c = &state.upstream.counters;
     let n = |v: &AtomicU64| Value::Unsigned(v.load(Ordering::Relaxed));
     let mut doc = BTreeMap::new();
@@ -448,6 +528,9 @@ fn stats(state: &State) -> Response {
         "uptime_secs".into(),
         Value::Unsigned(state.started.elapsed().as_secs()),
     );
+    let (entries, bytes) = state.retained.lock().await.usage();
+    doc.insert("cache_entries".into(), Value::Unsigned(entries as u64));
+    doc.insert("cache_charged_bytes".into(), Value::Unsigned(bytes as u64));
     doc.insert("reads".into(), n(&state.reads));
     doc.insert("served_fresh".into(), n(&state.fresh));
     doc.insert("sentinel_304_free".into(), n(&c.sentinel_304));

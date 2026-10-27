@@ -18,7 +18,9 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
@@ -27,16 +29,27 @@ from ghd.platforms import cli_binary_name, is_windows
 
 FAKE_GH = r"""
 import json, os, sys, urllib.request
+from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 args = sys.argv[1:]
-if args[:2] == ["api", "fixture/body"]:
+collection = len(args) > 1 and args[0] == "api" and args[1].startswith("repos/o/r/actions/runs?")
+if args[:2] == ["api", "fixture/body"] or collection:
     with open(TRACE_PATH, "a", encoding="utf-8") as trace:
         trace.write(json.dumps(args) + "\n")
-    if any(word.startswith("If-None-Match:") for word in args):
-        print('HTTP/1.1 304 Not Modified\nETag: "portable-v1"\n')
-    else:
-        print('HTTP/1.1 200 OK\nETag: "portable-v1"\nCache-Control: private, max-age=60\n')
-        print('{"number":42,"title":"portable REST fixture"}')
+    if Path(TRACE_PATH).with_name("revalidation-fails").exists():
+        print("fixture origin unavailable", file=sys.stderr)
+        raise SystemExit(1)
+    conditional = any(word.startswith("If-None-Match:") for word in args)
+    print('HTTP/1.1 304 Not Modified' if conditional else 'HTTP/1.1 200 OK')
+    print('ETag: "portable-v1"')
+    policy = Path(TRACE_PATH).with_name("collection-policy")
+    print('Cache-Control: ' + (policy.read_text() if collection and policy.exists() else 'private, max-age=60'))
+    print()
+    if not conditional:
+        if collection:
+            print('{"workflow_runs":[{"id":42,"run_attempt":1,"name":"build","status":"completed","conclusion":"success"}]}')
+        else:
+            print('{"number":42,"title":"portable REST fixture"}')
     raise SystemExit(0)
 if args and args[0] == "api":
     if REAL_GH is not None:
@@ -67,6 +80,8 @@ if os.environ.get("GH_DEBUG") or os.environ.get("DEBUG"):
 with open(TRACE_PATH, "a", encoding="utf-8") as trace:
     trace.write(json.dumps(args) + "\n")
 kind, action = args[:2]
+if action == "edit":
+    raise SystemExit(0)
 if kind not in ("issue", "pr", "run") or action not in ("view", "list", "checks"):
     print(json.dumps({"fixture_args": args}, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
@@ -83,7 +98,7 @@ def row(number):
             "author": None, "labels": [], "assignees": [], "comments": [], "milestone": None,
             "reviews": [{"state": "APPROVED", "author": {"login": "reviewer"}}],
             "statusCheckRollup": [{"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            "attempt": attempt, "jobs": [], "name": "build", "bucket": "pending", "workflow": "CI"}
+            "attempt": attempt, "status": "completed", "headSha": "abc", "jobs": [], "name": "build", "bucket": "pending", "workflow": "CI"}
 
 def project(data):
     return {field: data.get(field) for field in fields}
@@ -100,6 +115,15 @@ raise SystemExit(8 if action == "checks" else 0)
 
 
 ResourceCli = tuple[Callable[..., subprocess.CompletedProcess[str]], Path]
+
+
+def apply_fixture_overrides(
+    env: dict[str, str], request: pytest.FixtureRequest
+) -> None:
+    """Only test-owned child environments receive per-case configuration."""
+    overrides = getattr(request, "param", None)
+    if isinstance(overrides, dict):
+        env.update(overrides)
 
 
 @pytest.fixture(name="resource_cli")
@@ -151,6 +175,11 @@ def _resource_cli(
         GHD_EXE=str(binary),
         GHD_STATE_DIR=str(state),
         GHD_FRESH_MS="60000",
+        GHD_CACHE_MAX_ENTRIES="4096",
+        GHD_CACHE_MAX_BYTES="67108864",
+        GHD_CACHE_DISK="0",
+        GHD_CACHE_TTLS="{}",
+        GHD_CACHE_SETTLED_MS="2000",
         GH_CONFIG_DIR=str(config),
         HOME=str(fixture_home),
         USERPROFILE=str(fixture_home),
@@ -162,6 +191,7 @@ def _resource_cli(
         HTTPS_PROXY="http://127.0.0.1:0",
         NO_PROXY="127.0.0.1,localhost",
     )
+    apply_fixture_overrides(env, request)
     if getattr(request, "param", None) in ("golden", "golden-zero"):
         if request.param == "golden-zero":
             env["GHD_FRESH_MS"] = "0"
@@ -170,49 +200,77 @@ def _resource_cli(
             "http_unix_socket: " + json.dumps(str(socket)) + "\n", encoding="utf-8"
         )
         env["GHD_GH_PATH"] = str(shutil.which("gh"))
+    with ExitStack() as daemons:
+        daemon = daemons.enter_context(
+            start_fixture_daemon(binary, env, tmp_path, state)
+        )
+
+        def invoke(
+            *args: str,
+            direct: bool = False,
+            native: bool = False,
+            python_code: str | None = None,
+            context: dict[str, str] | None = None,
+            daemon_action: Literal["restart", "stop"] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal daemon
+            if daemon_action == "stop":
+                stop_daemon(daemon)
+            if daemon_action == "restart":
+                previous = next(state.glob("identities-v1/*/endpoint")).read_bytes()
+                stop_daemon(daemon)
+                daemon = daemons.enter_context(
+                    start_fixture_daemon(binary, env, tmp_path, state, previous)
+                )
+            command = (
+                [str(shutil.which("gh")), *args]
+                if direct
+                else [str(binary), "gh", *args]
+            )
+            if native:
+                command = [str(binary), *args]
+            if python_code is not None:
+                command = [sys.executable, "-c", python_code]
+            return subprocess.run(
+                command,
+                env=env | (context or {}),
+                cwd=tmp_path,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+
+        yield invoke, trace
+
+
+@contextmanager
+def start_fixture_daemon(
+    binary: Path,
+    env: dict[str, str],
+    cwd: Path,
+    state: Path,
+    previous: bytes | None = None,
+) -> Iterator[subprocess.Popen[bytes]]:
     with subprocess.Popen(
         [str(binary), "daemon"],
         env=env,
-        cwd=tmp_path,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     ) as daemon:
         try:
             deadline = time.monotonic() + 10
-            while not list(state.glob("identities-v1/*/endpoint")):
+            while True:
+                endpoints = list(state.glob("identities-v1/*/endpoint"))
+                if endpoints and endpoints[0].read_bytes() != previous:
+                    break
                 assert daemon.poll() is None, (
                     "fixture daemon exited before publishing an endpoint"
                 )
                 assert time.monotonic() < deadline, "fixture daemon startup timed out"
                 time.sleep(0.01)
-
-            def invoke(
-                *args: str,
-                direct: bool = False,
-                native: bool = False,
-                python_code: str | None = None,
-                context: dict[str, str] | None = None,
-            ) -> subprocess.CompletedProcess[str]:
-                command = (
-                    [str(shutil.which("gh")), *args]
-                    if direct
-                    else [str(binary), "gh", *args]
-                )
-                if native:
-                    command = [str(binary), *args]
-                if python_code is not None:
-                    command = [sys.executable, "-c", python_code]
-                return subprocess.run(
-                    command,
-                    env=env | (context or {}),
-                    cwd=tmp_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                )
-
-            yield invoke, trace
+            yield daemon
         finally:
             stop_daemon(daemon)
 

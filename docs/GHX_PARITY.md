@@ -21,7 +21,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #8 | gh passthrough and mutation coherence | Implemented and verified; draft PR #18 |
 | #9 | Expanded resource and collection reads | Implemented and verified; draft PR #18 |
 | #10 | General REST cache and revalidation | Implemented and locally verified; draft PR #18 |
-| #11 | Bounded durable cache and restart invalidation | Pending |
+| #11 | Bounded durable cache and restart invalidation | Implemented and locally verified; draft PR #18 |
 | #12 | Shared rate governor and cooldown | Pending |
 | #13 | Repository snapshots and authority freshness | Pending |
 | #14 | Daemon/cache operations and configuration | Pending |
@@ -231,9 +231,8 @@ real-gh Unix API cases; the platform adapter has native Windows crash-bit tests.
 [Hosted run40473014155](https://github.com/forge-ci/ghd/actions/runs/40473014155)
 for adc690e passes fast, Dylint and native macOS x64/arm64. Windows x64/arm64
 cross-builds pass; native tests report a write-journal failure and hang in the
-lost-reply fixture until job cancellation. Native Windows validation remains
-incomplete. The next correction addresses those foundation failures before
-full-goal delivery; no Windows success is inferred from the local Linux run.
+lost-reply fixture until job cancellation. That run was not a Windows success; the correction and its independent rerun
+are recorded below.
 
 The Windows correction uses the private reader's matching directory/file
 custody APIs. General directory creation does not replace an elevated token's
@@ -243,7 +242,9 @@ file creation assigns it on the exact file handle. A common read/replace/read
 regression covers both publications. The lost-reply fixture now bounds accept
 and request reads and reports child stdout/stderr before a server failure,
 so an endpoint failure cannot conceal diagnostics behind an unbounded join.
-Native Windows verification of this correction is pending the next push.
+[Hosted correction run40486233444](https://github.com/forge-ci/ghd/actions/runs/40486233444)
+completed successfully at ac40666: fast, Dylint, CI OK and native x64/ARM64
+Windows and macOS integration suites all passed.
 
 The directory check also runs for existing Linux/macOS state directories.
 The regression starts with an ordinary existing directory, enforces the
@@ -262,5 +263,34 @@ The corrected private-state tree passes `./ci.py all`: all Rust suites,
 122 installed Python tests, backend wheel smoke and action gates. The new
 existing-directory/leftover-stage/failure-cleanup regression passes. Read-only
 clud-review is clean. Contract precheck reports zero violations with the
-existing 17 local-only needs-review checks retained. The next hosted run selects
-native Windows/macOS integration coverage as well as the required routine jobs.
+existing 17 local-only needs-review checks retained. The hosted correction run above also verifies native Windows/macOS integration
+coverage alongside the required routine jobs.
+
+
+## Bounded retention and restart validation (#11)
+
+The shared LRU index accounts for all four cache namespaces, including empty
+coalescing slots. Configured entry/byte limits, zero/oversized capacity and
+cross-namespace eviction are regression-tested. Detached active owners are
+limited separately; their completion cannot recreate an evicted slot.
+
+Optional disk snapshots preserve only reads with validators, under the same
+identity key and original write epoch. Restarts force validation before reuse;
+exact CLI/raw GraphQL responses without validators are fetched again. Disk has
+its own bounded capacity rather than extending the memory accounting budget.
+The store uses owner-private native files and stable interprocess locking.
+Schema/checksum/custody failures and publication errors are explicit. Process
+interruption is covered; power-loss directory durability is not claimed.
+
+Regression schedules include ghx #27's daemon-stopped mutation, overlapping
+writes, abandoned intents, late old publishers, failed replacement and
+concurrent snapshot publishers. The short freshness default and run-attempt
+keys remain unchanged. Explicit per-command TTLs and an optional completed-run
+extension preserve short TTLs for mutable metadata, even when stable projections
+share the same body. Origin storage/freshness policy also applies to persisted
+collections. A canceled restart-validation regression verifies that restored
+bytes cannot stay indexed outside their payload charge. The final #11 batch passes `./ci.py all`: all Rust suites, 136 installed Python
+tests, backend wheel smoke and action gates. Retained RED evidence covers the
+two capacity cases and five policy cases. Read-only clud-review is clean;
+contract precheck reports zero violations and the same 17 local-only review
+items. Native validation of the new persistence head follows this push.

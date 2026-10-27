@@ -64,6 +64,10 @@ async fn mock_upstream(
 
 impl Harness {
     async fn start(disabled: bool) -> Self {
+        Self::configured(disabled, false).await
+    }
+
+    async fn configured(disabled: bool, disk: bool) -> Self {
         let directory = std::env::temp_dir().join(format!(
             "ghd-coherence-test-{}-{}",
             std::process::id(),
@@ -78,6 +82,15 @@ impl Harness {
             Identity::from_token("github.com", "fixture-coherence".into()).expect("identity");
         let mut state = new_state(&identity, "session".into()).expect("state");
         state.journal = Journal::at(directory.clone());
+        if disk {
+            state.disk = Some(Arc::new(ghd_core::durable::Store::new(
+                directory.join("cache"),
+                identity.key().into(),
+                4096,
+                64 * 1024 * 1024,
+                state.journal.clone(),
+            )));
+        }
         state.fresh_for = Duration::MAX;
         let upstream = Arc::get_mut(&mut state.upstream).expect("unshared");
         if disabled {
@@ -142,24 +155,9 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
         .expect("runtime");
     runtime.run(async {
         let harness = Harness::start(false).await;
-        harness
-            .state
-            .cache
-            .lock()
-            .await
-            .insert(("o".into(), "r".into(), 1), Arc::new(Mutex::new(None)));
-        harness
-            .state
-            .gh_reads
-            .lock()
-            .await
-            .insert("resource".into(), Arc::new(Mutex::new(None)));
-        harness
-            .state
-            .rest_reads
-            .lock()
-            .await
-            .insert("rest".into(), Arc::new(Mutex::new(None)));
+        crate::retention::pr(&harness.state, "pr:test").await;
+        crate::retention::gh(&harness.state, "gh:test").await;
+        crate::retention::rest(&harness.state, "rest:test").await;
         let port = harness.port;
         let key = harness.key.clone();
         let pending = async_engine::launch(async move { request(port, &key, "{ version }").await });
@@ -174,13 +172,7 @@ fn mutation_clears_both_cache_tiers_and_rejects_an_old_inflight_result() {
         .await;
         assert_eq!(status, 200);
         assert!(reply.error.is_empty());
-        assert!(
-            harness.state.cache.lock().await.is_empty(),
-            "PR cache invalidated too"
-        );
-        assert!(harness.state.graphql.lock().await.is_empty());
-        assert!(harness.state.gh_reads.lock().await.is_empty());
-        assert!(harness.state.rest_reads.lock().await.is_empty());
+        assert_eq!(harness.state.retained.lock().await.usage(), (0, 0));
         harness.release.notify_one();
         let (status, stale) = pending.await.expect("pending reader");
         assert_eq!(status, 409);
@@ -221,5 +213,56 @@ fn uncertain_mutation_leaves_a_restart_visible_fence() {
         let (status, read) = request(harness.port, &harness.key, "{ version }").await;
         assert_eq!(status, 409);
         assert!(read.json.is_empty());
+    });
+}
+
+#[test]
+fn canceled_restart_validation_leaves_no_uncharged_indexed_body() {
+    let runtime = RuntimeBuilder::multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.run(async {
+        let harness = Harness::configured(false, true).await;
+        let key = crate::retention::key("pr", b"o/r/42");
+        let entry = Entry {
+            etag: Some("v1".into()),
+            fields: BTreeMap::from([("title".into(), Value::String("x".repeat(1024 * 1024)))]),
+            validated: None,
+            ttl: Duration::MAX,
+        };
+        crate::persistence::save_pr(&harness.state, &key, 0, &entry)
+            .await
+            .expect("restart bytes");
+        let state = Arc::clone(&harness.state);
+        let pending = async_engine::launch(async move {
+            pr_view(
+                &state,
+                &PrViewRequest {
+                    owner: "o".into(),
+                    repo: "r".into(),
+                    number: 42,
+                    fields: vec!["title".into()],
+                    ..Default::default()
+                }
+                .encode_to_vec(),
+            )
+            .await
+        });
+        async_engine::timeout(Duration::from_secs(5), harness.started.notified())
+            .await
+            .expect("origin validation started");
+        pending.cancel();
+        assert!(
+            pending.await.is_err(),
+            "validation canceled while body is request-local"
+        );
+        let slot = crate::retention::pr(&harness.state, &key).await;
+        assert!(
+            slot.lock().await.is_none(),
+            "no restored bytes survive outside charged retention"
+        );
+        assert!(harness.state.retained.lock().await.usage().1 < 4096);
+        harness.release.notify_one();
     });
 }

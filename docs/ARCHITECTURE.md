@@ -183,9 +183,10 @@ mutation payloads. Corrupt or unresolved records fail closed.
 Daemon reads check the journal, synchronize their cache generation and check
 again before returning bytes. A write clears PR and raw-query maps, and a
 pre-write in-flight result cannot become authoritative after the generation
-changes. The same fence is the coherence input for future persistent caches.
-The journal currently proves process-crash custody; full durable snapshot
-storage and filesystem crash validation belong to issue #11.
+changes. The same generation travels with optional persistent records. A
+snapshot captured before a stopped-daemon mutation cannot be relabeled with a
+new epoch. Restored bytes always require origin validation; this contract does
+not depend on treating directory publication as a power-loss transaction.
 
 GraphQL classification uses an actual parser in ghd-core; operationName is
 part of both the upstream envelope and the exact query cache key. The daemon
@@ -247,9 +248,8 @@ context. No-store/wildcard-Vary responses cannot persist in the map, and
 no-cache/max-age policies constrain the short application freshness window.
 A 304 requires the matching retained validator/body; a 200 replaces them and a
 missing validator causes the next stale refresh to fetch the full body.
-The same generation fence clears all four read maps and rejects old in-flight
-publications. The generic REST map remains in memory pending #11's bounded
-durable store.
+The same generation fence clears the shared retention store and rejects old
+in-flight publications.
 
 Transformations run through the private local gh renderer on every read;
 canonical body sharing does not freeze time-dependent template output. Error
@@ -264,3 +264,65 @@ creation together. Both directory and file owners must be TokenUser, including
 under elevated tokens whose default owner may be Administrators. The reader
 continues to reject mismatched owners and ACLs; general filesystem directory
 privacy alone does not establish the stricter state-file contract.
+
+
+## Shared retention and conditional restart bodies
+
+`ghd-core::retention::Cache` owns an entry/byte-bounded LRU index. The daemon
+stores all four typed slot namespaces in that one index, using domain-separated
+digest keys. Empty coalescing slots receive a bookkeeping charge too. Resource
+response bytes, selected-field storage, ETags and decoded PR fields contribute
+to the charge. The decoded PR tree uses a conservative serialized-size multiplier;
+these are retention accounting limits, not an allocator or RSS promise.
+
+A slot's Arc identity is its publication lease. Completion reserves the new
+weight only if that same slot remains indexed. Eviction can detach an active
+slot but cannot let its eventual fetch recreate an evicted entry. A 32-permit
+read admission pool bounds detached active owners; the separate four-permit
+upstream child pool remains owned until each bounded child is reaped. Identical
+admitted reads still coalesce. Busy admission fails after one second.
+
+`ghd-core::durable::Store` provides the optional restart tier. It serializes
+bounded records in one private snapshot with schema, identity, original read
+epoch and BLAKE3 checksum. A stable private lock serializes read/modify/replace
+across processes; lock acquisition is bounded. The store verifies the journal
+before loading, before publication and after publication. Changed epochs drop
+old records rather than rewriting their epoch. Crashed or overlapping writes
+remain fenced through the existing write-intent journal.
+
+Only validator-bearing PR, run-collection and REST records are saved. Restored
+entries start stale; origin 304 permits matching-body reuse, while a changed
+200 replaces bytes. A restart never turns a saved timestamp into freshness.
+No-validator/exact CLI and raw GraphQL reads fetch normally after restart.
+No-store or missing validators remove previously persisted REST records.
+
+Memory and disk each have the configured entry/byte caps; neither is an RSS
+limit. Snapshot parsing/encoding and admitted responses require bounded working
+buffers outside retained-body accounting. Snapshot corruption, identity/schema
+mismatch, excessive size, unsafe native permissions and I/O failures are
+explicit errors. Under the exclusive lock, leftover publication stages require
+explicit recovery before further writes, preventing repeated crashes from
+accumulating more staged cache bodies. They are never silently deleted. The
+existing private-file primitives work across supported
+hosts. Atomic replacement and file sync cover process interruption; directory
+metadata and power-loss durability are not claimed. Origin validation remains
+mandatory after every restart. No five-minute minimum or implicit immutable
+lifetime is introduced, and run attempts remain part of their resource keys.
+
+
+`cache_policy::Policy` validates explicit per-command millisecond overrides and
+an optional completed-run TTL. That extension applies only to completed `run
+view` reads with an explicit attempt and a stable-field allowlist. Freshness is
+computed for each projection, so a later mutable-metadata request cannot inherit
+the longer lifetime of a stable projection sharing its cached body. Observed
+origin no-store/no-cache/max-age policy caps both ordinary and configured lifetimes,
+including run collections and PR sentinels. Opaque native gh responses expose
+no headers; their application TTL comes from the explicit command policy. Restored validation timestamps are
+explicitly absent instead of being reconstructed from a wall-clock timestamp.
+
+A response under validation or rendering lives in its admitted request, with
+the indexed slot empty. Only successful reservation and publication attach it
+back to that slot. Cancellation and failed revalidation therefore cannot leave
+an undercharged body indexed. Detached GraphQL batch workers own separate
+32-permit capacity until completion, and each batch admits at most 32 distinct
+PRs. Subscriber cancellation cannot free a worker's still-live capacity.

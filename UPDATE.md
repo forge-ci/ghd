@@ -128,3 +128,19 @@ references removed concepts is worse than no procedure.
   renderer configuration directories.
 - Bound the lost-reply test server and expose child diagnostics promptly;
   retain its requirement that dispatched operations are never replayed.
+
+
+## ghx parity: bounded retention and restart safety (#11)
+
+- Share entry and byte limits across all read namespaces and their coalescing
+  slots; reject invalid configuration and disable retention with either zero.
+- Bound active reads separately, preserve identical-read coalescing and prevent
+  evicted in-flight requests from recreating detached slots after completion.
+- Add opt-in owner-private, identity- and generation-bound restart snapshots for
+  reads with validators. Always revalidate restored bytes before reuse.
+- Fence offline/overlapping/uncertain writes and stale publishers. Fail explicitly
+  on corruption, incompatible schema, unsafe permissions or failed publication.
+- Keep the short default TTL; add explicit per-command TTLs and optional longer
+  completed-run projections restricted to stable fields and an explicit attempt.
+  Mutable metadata retains its ordinary policy. Disk capacity is separate from
+  the memory budget; origin no-store/no-cache/max-age still apply.

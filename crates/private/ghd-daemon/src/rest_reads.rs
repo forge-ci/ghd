@@ -8,9 +8,9 @@ use ghd_core::{
     proto::{GhReadRequest, GhReadResponse},
     resource::ReadPlan,
 };
-use kernal_api::{async_engine::Mutex, json::Value};
+use kernal_api::json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     io,
     sync::{
         Arc,
@@ -20,13 +20,12 @@ use std::{
 };
 
 pub struct Entry {
-    body: Vec<u8>,
-    stderr: Vec<u8>,
-    etag: Option<String>,
-    validated: Instant,
-    ttl: Duration,
+    pub(crate) body: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) etag: Option<String>,
+    pub(crate) validated: Option<Instant>,
+    pub(crate) ttl: Duration,
 }
-pub type Cache = Mutex<HashMap<String, Arc<Mutex<Option<Entry>>>>>;
 
 #[derive(Default)]
 pub struct Counters {
@@ -102,17 +101,20 @@ impl Counters {
     }
 }
 
-struct Policy {
-    store: bool,
-    ttl: Duration,
+pub(crate) struct Policy {
+    pub(crate) store: bool,
+    pub(crate) ttl: Duration,
+    pub(crate) specified: bool,
 }
-fn policy(headers: &str, fresh: Duration) -> Policy {
+pub(crate) fn policy(headers: &str, fresh: Duration) -> Policy {
     let mut out = Policy {
         store: true,
         ttl: fresh,
+        specified: false,
     };
     for (name, value) in headers.lines().filter_map(|line| line.split_once(':')) {
         if name.eq_ignore_ascii_case("cache-control") {
+            out.specified = true;
             for directive in value.split(',') {
                 let (name, value) = directive
                     .trim()
@@ -147,17 +149,18 @@ pub async fn run(
     request: &GhReadRequest,
     plan: &ReadPlan,
 ) -> io::Result<GhReadResponse> {
-    let rest = plan
-        .rest
-        .as_ref()
-        .ok_or_else(|| io::Error::other("missing REST plan"))?;
+    let rest = required_rest(plan)?;
     let epoch = read_epoch(state).await?;
-    let slot = {
-        let mut cache = state.rest_reads.lock().await;
-        Arc::clone(cache.entry(gh_reads::key(request, plan)).or_default())
-    };
-    let mut entry = slot.lock().await;
+    let _admission = crate::retention::admit(state).await?;
+    let key = crate::retention::key("rest", gh_reads::key(request, plan).as_bytes());
+    let slot = crate::retention::rest(state, &key).await;
+    let mut retained = slot.lock().await;
+    let mut entry = retained.take();
+    if entry.is_none() {
+        entry = crate::persistence::restore_rest(state, &key, epoch).await?;
+    }
     if let Some(response) = fresh(state, request, plan, entry.as_ref(), epoch).await? {
+        *retained = entry;
         return Ok(response);
     }
     let response = fetch(state, request, rest, entry.as_ref()).await?;
@@ -180,42 +183,11 @@ pub async fn run(
     let headers = std::str::from_utf8(&response.stdout[..response.stdout.len() - body.len()])
         .map_err(io::Error::other)?;
     state.rest_counters.observe(headers)?;
-    let policy = policy(headers, state.fresh_for);
+    let policy = policy(headers, Duration::MAX);
     if status == 304 && matches!(response.exit_code, 0 | 1) {
-        let cached = entry
-            .as_mut()
-            .filter(|entry| entry.etag.is_some())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "REST304 has no retained validated body",
-                )
-            })?;
-        state
-            .rest_counters
-            .revalidated
-            .fetch_add(1, Ordering::Relaxed);
-        if etag.is_some() {
-            cached.etag = etag;
-        }
-        cached.validated = Instant::now();
-        if header(headers, "cache-control").is_some() {
-            cached.ttl = policy.ttl;
-        }
-        let response = render(
-            state,
-            request,
-            plan,
-            cached.body.clone(),
-            cached.stderr.clone(),
-            0,
-            "revalidated",
-        )
-        .await?;
-        state.journal.confirm(epoch)?;
-        if !policy.store {
-            *entry = None;
-        }
+        let response = revalidated(state, request, plan, &mut entry, etag, &policy, epoch).await?;
+        retain(state, &key, &slot, &mut entry, policy.store, epoch).await?;
+        *retained = entry;
         return Ok(response);
     }
     if response.exit_code != 0 {
@@ -234,17 +206,101 @@ pub async fn run(
     .await?;
     state.journal.confirm(epoch)?;
     if status == 200 && response.exit_code == 0 && policy.store && !rest.rate_limit {
-        *entry = Some(Entry {
+        entry = Some(Entry {
             body,
             stderr: response.stderr,
             etag,
-            validated: Instant::now(),
+            validated: Some(Instant::now()),
             ttl: policy.ttl,
         });
     } else {
+        entry = None;
+    }
+    retain(state, &key, &slot, &mut entry, true, epoch).await?;
+    *retained = entry;
+    Ok(rendered)
+}
+
+async fn revalidated(
+    state: &State,
+    request: &GhReadRequest,
+    plan: &ReadPlan,
+    entry: &mut Option<Entry>,
+    etag: Option<String>,
+    policy: &Policy,
+    epoch: u64,
+) -> io::Result<GhReadResponse> {
+    let cached = entry
+        .as_mut()
+        .filter(|entry| entry.etag.is_some())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "REST304 has no retained validated body",
+            )
+        })?;
+    state
+        .rest_counters
+        .revalidated
+        .fetch_add(1, Ordering::Relaxed);
+    if etag.is_some() {
+        cached.etag = etag;
+    }
+    cached.validated = Some(Instant::now());
+    if policy.specified {
+        cached.ttl = policy.ttl;
+    }
+    let response = render(
+        state,
+        request,
+        plan,
+        cached.body.clone(),
+        cached.stderr.clone(),
+        0,
+        "revalidated",
+    )
+    .await?;
+    state.journal.confirm(epoch)?;
+    Ok(response)
+}
+
+fn required_rest(plan: &ReadPlan) -> io::Result<&ghd_core::rest::RestPlan> {
+    plan.rest
+        .as_ref()
+        .ok_or_else(|| io::Error::other("missing REST plan"))
+}
+
+async fn retain(
+    state: &State,
+    key: &str,
+    slot: &Arc<kernal_api::async_engine::Mutex<Option<Entry>>>,
+    entry: &mut Option<Entry>,
+    store: bool,
+    epoch: u64,
+) -> io::Result<()> {
+    let weight = entry.as_ref().map_or(0, |cached| {
+        cached
+            .body
+            .len()
+            .saturating_add(cached.stderr.len())
+            .saturating_add(cached.etag.as_ref().map_or(0, String::len))
+    });
+    let retained = crate::retention::reserve(
+        state,
+        key,
+        crate::retention::CachedSlot::Rest(Arc::clone(slot)),
+        if store { weight } else { 0 },
+    )
+    .await;
+    if !store || !retained {
         *entry = None;
     }
-    Ok(rendered)
+    if let Some(entry) = entry {
+        crate::persistence::save_rest(state, key, epoch, entry).await?;
+    } else {
+        crate::persistence::forget(state, key, epoch).await?;
+    }
+    state.journal.confirm(epoch)
 }
 
 async fn fresh(
@@ -255,8 +311,15 @@ async fn fresh(
     epoch: u64,
 ) -> io::Result<Option<GhReadResponse>> {
     let allowed = !plan.rest.as_ref().is_some_and(|rest| rest.force_refresh);
-    let Some(cached) = entry.filter(|entry| allowed && entry.validated.elapsed() < entry.ttl)
-    else {
+    let Some(cached) = entry.filter(|entry| {
+        allowed
+            && entry.validated.is_some_and(|at| {
+                at.elapsed()
+                    < entry
+                        .ttl
+                        .min(state.policy.command("api", "rest", state.fresh_for))
+            })
+    }) else {
         return Ok(None);
     };
     state.journal.confirm(epoch)?;

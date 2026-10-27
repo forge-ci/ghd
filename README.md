@@ -139,6 +139,38 @@ stdout/stderr bytes, exit code, source and `limit_reached`. The existing
 renderer on a private authenticated loopback body, with separate credentials
 and no external proxy access.
 
+The daemon shares one LRU budget across PR, GraphQL, resource and REST reads.
+`GHD_CACHE_MAX_ENTRIES` defaults to 4096; `GHD_CACHE_MAX_BYTES` defaults to
+67108864. Either zero disables retention. The byte charge includes response
+bodies, fields and per-key bookkeeping; it is not a process RSS limit. At most
+32 reads own active slots; admission waits up to one second before a busy error.
+Four upstream subprocess permits and 32 MiB output bounds remain separate.
+
+Set `GHD_CACHE_DISK=1` to opt into private, identity-bound restart snapshots
+under the identity's `cache-v1/` directory. Disk has its own entry/byte limits
+using the same configured values. Only PR, run collection and REST bodies with
+origin validators are persisted. Every restored body starts stale and requires
+upstream validation, even inside the old TTL. Writes invalidate disk generations
+while the daemon is stopped too. Corruption, incompatible schema, unsafe file
+permissions, interrupted staging, busy locks and failed publication produce
+explicit errors. Interrupted stages require recovery before another disk write;
+disable disk caching while preserving those files for inspection. Leave
+this option unset for memory-only operation. Invalid limit values are errors.
+
+Persistence uses owner-private files, bounded protobuf/checksum envelopes,
+interprocess locks and atomic replacement on Linux, macOS and Windows. It
+supports process-crash recovery; it does not promise filesystem/power-loss
+transaction durability. Restored bytes never bypass origin validation. The
+short freshness default is unchanged. `GHD_CACHE_TTLS` accepts up to 32 explicit
+command TTLs in milliseconds, for example
+`'{"issue view":0,"run list":1000,"api rest":500}'`. Zero forces validation.
+`GHD_CACHE_SETTLED_MS=60000` optionally extends completed `run view` projections
+only when `--attempt` is explicit and requested fields are limited to `attempt`,
+`conclusion`, `databaseId`, `headSha`, `number`, `startedAt`, `status` and `url`.
+Mutable metadata such as `workflowName` keeps the ordinary command TTL, even
+when sharing the same body. Observed origin cache policy caps configured TTLs; opaque gh command output
+does not expose HTTP headers.
+
 **`ghd api graphql`**
 - Takes gh's `-f` (string) and `-F` (typed, `@file`) fields and prints
   GitHub's body.

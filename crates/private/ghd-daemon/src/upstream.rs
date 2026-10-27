@@ -37,6 +37,7 @@ pub struct Upstream {
     pub counters: Counters,
     batches: Mutex<HashMap<(String, String), Batch>>,
     window: Duration,
+    batch_permits: async_engine::Semaphore,
 }
 
 type BatchResult = Arc<Result<HashMap<u64, Fields>, String>>;
@@ -63,6 +64,7 @@ impl Upstream {
             counters: Counters::default(),
             batches: Mutex::new(HashMap::new()),
             window,
+            batch_permits: async_engine::Semaphore::new(32),
         })
     }
 
@@ -79,11 +81,11 @@ impl Upstream {
     }
 
     /// Conditional GET. Returns `(status, etag)`; a 304 costs no budget.
-    pub async fn sentinel(
+    pub(crate) async fn sentinel(
         &self,
         path: &str,
         etag: Option<&str>,
-    ) -> io::Result<(u16, Option<String>)> {
+    ) -> io::Result<(u16, Option<String>, crate::rest_reads::Policy)> {
         let url = format!("{}{path}", self.api);
         let mut headers = vec![
             ("Authorization", self.auth.as_str()),
@@ -109,12 +111,18 @@ impl Upstream {
         {
             self.counters.core_remaining.store(left, Ordering::Relaxed);
         }
+        let headers = ["cache-control", "age", "vary"]
+            .into_iter()
+            .filter_map(|name| header_str(&response, name).map(|value| format!("{name}: {value}")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let policy = crate::rest_reads::policy(&headers, Duration::MAX);
         response.into_bytes().await?;
         match status {
             304 => self.counters.sentinel_304.fetch_add(1, Ordering::Relaxed),
             _ => self.counters.sentinel_200.fetch_add(1, Ordering::Relaxed),
         };
-        Ok((status, new_etag))
+        Ok((status, new_etag, policy))
     }
 
     /// Fetch one PR's fields, sharing a single GraphQL query with every other
@@ -126,10 +134,17 @@ impl Upstream {
         number: u64,
         fields: &BTreeSet<String>,
     ) -> Result<Fields, String> {
+        let capacity = async_engine::timeout(Duration::from_secs(1), self.batch_permits.acquire())
+            .await
+            .map_err(|_| "GraphQL batch capacity is busy; retry".to_string())?;
         let key = (owner.to_string(), repo.to_string());
         let mut receiver = {
             let mut batches = self.batches.lock().await;
             if let Some(batch) = batches.get_mut(&key) {
+                if batch.prs.len() >= 32 && !batch.prs.contains_key(&number) {
+                    return Err("GraphQL batch member capacity is busy; retry".into());
+                }
+                drop(capacity);
                 batch
                     .prs
                     .entry(number)
@@ -143,7 +158,12 @@ impl Upstream {
                 prs.insert(number, fields.clone());
                 batches.insert(key.clone(), Batch { prs, done });
                 let this = Arc::clone(self);
-                async_engine::launch(async move { this.flush(key).await }).detach();
+                async_engine::launch(async move {
+                    // Cancellation of every subscriber cannot free a live batch's capacity.
+                    let _capacity = capacity;
+                    this.flush(key).await;
+                })
+                .detach();
                 receiver
             }
         };
@@ -345,5 +365,42 @@ mod tests {
         let out = split(&data, &prs).expect("test fixture");
         assert_eq!(out[&2]["state"], Value::String("MERGED".into()));
         assert_eq!(out[&1]["state"], Value::String("OPEN".into()));
+    }
+
+    #[test]
+    fn canceled_subscribers_cannot_grow_a_batch_past_its_member_cap() {
+        let runtime = async_engine::RuntimeBuilder::multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.run(async {
+            let identity =
+                ghd_core::identity::Identity::from_token("github.com", "batch-fixture".into())
+                    .expect("identity");
+            let upstream = Arc::new(Upstream::new(&identity, Duration::ZERO).expect("upstream"));
+            let (done, receiver) = async_engine::broadcast_channel(1).expect("channel");
+            drop(receiver); // An abandoned waiting caller must not relax the cap.
+            upstream.batches.lock().await.insert(
+                ("o".into(), "r".into()),
+                Batch {
+                    prs: (1..=32).map(|number| (number, set(&["title"]))).collect(),
+                    done,
+                },
+            );
+            let error = async_engine::timeout(
+                Duration::from_secs(1),
+                upstream.pull_request("o", "r", 33, &set(&["title"])),
+            )
+            .await
+            .expect("bounded refusal")
+            .expect_err("bounded batch");
+            assert!(error.contains("member capacity"));
+            assert_eq!(
+                upstream.batches.lock().await[&("o".into(), "r".into())]
+                    .prs
+                    .len(),
+                32
+            );
+        });
     }
 }

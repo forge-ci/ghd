@@ -6,22 +6,19 @@ use ghd_core::{
     proto::{GhReadRequest, GhReadResponse},
     resource::{self, ReadPlan},
 };
-use kernal_api::async_engine::Mutex;
 use kernal_api::http_server::Response;
 use prost::Message;
-use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct Entry {
     pub response: GhReadResponse,
     pub fields: Vec<String>,
-    pub validated: Instant,
+    pub validated: Option<Instant>,
     pub etag: Option<String>,
+    pub ttl: Duration,
 }
-
-pub type Cache = Mutex<HashMap<String, Arc<Mutex<Option<Entry>>>>>;
 
 fn reply(status: u16, response: GhReadResponse) -> Response {
     Response::new(status, response.encode_to_vec())
@@ -65,7 +62,7 @@ pub async fn handle(state: &State, body: &[u8]) -> Response {
     }
 }
 
-async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadResponse> {
+fn validated_plan(state: &State, request: &GhReadRequest) -> io::Result<ReadPlan> {
     gh_executor::validate(request)?;
     let plan = resource::prepare(
         &request.args,
@@ -84,23 +81,38 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
             "gh read host does not match daemon identity",
         ));
     }
+    Ok(plan)
+}
+
+async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadResponse> {
+    let plan = validated_plan(state, request)?;
     if plan.rest.is_some() {
         return crate::rest_reads::run(state, request, &plan).await;
     }
     let epoch = read_epoch(state).await?;
-    let slot = {
-        let mut cache = state.gh_reads.lock().await;
-        Arc::clone(cache.entry(key(request, &plan)).or_default())
-    };
-    let mut entry = slot.lock().await;
+    let _admission = crate::retention::admit(state).await?;
+    let key = crate::retention::key("gh", key(request, &plan).as_bytes());
+    let slot = crate::retention::gh(state, &key).await;
+    let mut retained = slot.lock().await;
+    let mut entry = retained.take();
+    if entry.is_none() {
+        entry = crate::persistence::restore_gh(state, &key, epoch).await?;
+    }
     if let Some(cached) = entry.as_ref()
-        && cached.validated.elapsed() < state.fresh_for
+        && cached.validated.is_some_and(|at| {
+            at.elapsed()
+                < state
+                    .policy
+                    .resource(&plan, &cached.response.stdout, state.fresh_for)
+                    .min(cached.ttl)
+        })
         && (!plan.resource || plan.project(&cached.response.stdout).is_ok())
     {
         state.journal.confirm(epoch)?;
         let mut response = project(state, request, &plan, &cached.response).await?;
         state.journal.confirm(epoch)?;
         response.source = "fresh".into();
+        *retained = entry;
         return Ok(response);
     }
     let extra = entry
@@ -111,7 +123,12 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
     } else {
         plan.fetch_args.clone()
     };
-    let (response, etag) = fetch(state, request, &plan, &fetch_args, entry.as_ref()).await?;
+    let Fetched {
+        response,
+        etag,
+        ttl,
+        store,
+    } = fetch(state, request, &plan, &fetch_args, entry.as_ref()).await?;
     state.journal.confirm(epoch)?;
     let checks_result = plan.kind == "pr"
         && plan.action == "checks"
@@ -134,13 +151,67 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
     } else {
         Vec::new()
     };
-    *entry = Some(Entry {
-        response,
-        fields,
-        validated: Instant::now(),
-        etag,
-    });
+    entry = retain(
+        state,
+        &key,
+        &slot,
+        Entry {
+            response,
+            fields,
+            validated: Some(Instant::now()),
+            etag,
+            ttl,
+        },
+        store,
+        epoch,
+    )
+    .await?;
+    *retained = entry;
     Ok(projected)
+}
+
+async fn retain(
+    state: &State,
+    key: &str,
+    slot: &Arc<kernal_api::async_engine::Mutex<Option<Entry>>>,
+    entry: Entry,
+    store: bool,
+    epoch: u64,
+) -> io::Result<Option<Entry>> {
+    let weight = entry
+        .response
+        .encoded_len()
+        .saturating_add(
+            entry
+                .fields
+                .iter()
+                .map(|field| field.len().saturating_add(32))
+                .sum::<usize>(),
+        )
+        .saturating_add(entry.etag.as_ref().map_or(0, String::len));
+    let retain = crate::retention::reserve(
+        state,
+        key,
+        crate::retention::CachedSlot::Gh(Arc::clone(slot)),
+        if store { weight } else { 0 },
+    )
+    .await
+        && store;
+    let entry = retain.then_some(entry);
+    if let Some(entry) = entry.as_ref() {
+        crate::persistence::save_gh(state, key, epoch, entry).await?;
+    } else {
+        crate::persistence::forget(state, key, epoch).await?;
+    }
+    state.journal.confirm(epoch)?;
+    Ok(entry)
+}
+
+struct Fetched {
+    response: GhReadResponse,
+    etag: Option<String>,
+    ttl: Duration,
+    store: bool,
 }
 
 async fn fetch(
@@ -149,7 +220,7 @@ async fn fetch(
     plan: &ReadPlan,
     args: &[String],
     entry: Option<&Entry>,
-) -> io::Result<(GhReadResponse, Option<String>)> {
+) -> io::Result<Fetched> {
     let retained = entry.map_or(&[][..], |cached| cached.fields.as_slice());
     if let Some(path) = run_collection::path(plan, retained) {
         let etag = entry.and_then(|cached| cached.etag.as_deref());
@@ -167,18 +238,35 @@ async fn fetch(
         }
         let response = execute(state, request, &api_args).await?;
         if let Ok((status, next_etag, body)) = run_collection::included_response(&response.stdout) {
+            let headers =
+                std::str::from_utf8(&response.stdout[..response.stdout.len() - body.len()])
+                    .map_err(io::Error::other)?;
+            let policy = crate::rest_reads::policy(headers, Duration::MAX);
             if status == 304 {
-                return revalidated(entry, next_etag);
+                let (response, etag) = revalidated(entry, next_etag)?;
+                let ttl = if policy.specified {
+                    policy.ttl
+                } else {
+                    entry.map_or(policy.ttl, |entry| entry.ttl)
+                };
+                return Ok(Fetched {
+                    response,
+                    etag,
+                    ttl,
+                    store: policy.store,
+                });
             }
             if status == 200 && response.exit_code == 0 {
-                return Ok((
-                    GhReadResponse {
+                return Ok(Fetched {
+                    response: GhReadResponse {
                         stdout: run_collection::translate(body)?,
                         source: "fetched".into(),
                         ..Default::default()
                     },
-                    next_etag,
-                ));
+                    etag: next_etag,
+                    ttl: policy.ttl,
+                    store: policy.store,
+                });
             }
         } else if response.exit_code == 0 {
             return Err(io::Error::new(
@@ -189,7 +277,12 @@ async fn fetch(
         // Native gh owns exact command error rendering. This is a safe read;
         // retrying an HTTP error as that command cannot repeat a mutation.
     }
-    Ok((execute(state, request, args).await?, None))
+    Ok(Fetched {
+        response: execute(state, request, args).await?,
+        etag: None,
+        ttl: Duration::MAX,
+        store: true,
+    })
 }
 
 async fn execute(
@@ -257,8 +350,9 @@ mod tests {
                 ..Default::default()
             },
             fields: Vec::new(),
-            validated: Instant::now(),
+            validated: Some(Instant::now()),
             etag: Some("\"v1\"".into()),
+            ttl: Duration::MAX,
         };
         let (response, etag) = revalidated(Some(&entry), None).expect("retained");
         assert_eq!(response.stdout, b"retained rows");

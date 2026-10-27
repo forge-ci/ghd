@@ -23,18 +23,24 @@ async fn cached_server(identity: &Identity, login: &str) -> TestServer {
     let state = Arc::new(state);
     let key = gql::body("{viewer{login}}", &[]).expect("query body");
     let answer = format!("{{\"data\":{{\"viewer\":{{\"login\":\"{login}\"}}}}}}");
-    state.graphql.lock().await.insert(
-        key,
-        Arc::new(Mutex::new(Some((answer.into_bytes(), Instant::now())))),
+    state.retained.lock().await.insert(
+        crate::retention::key("graphql", &key),
+        crate::retention::CachedSlot::Graphql(Arc::new(Mutex::new(Some((
+            answer.into_bytes(),
+            Instant::now(),
+        ))))),
+        512,
     );
     let fields = BTreeMap::from([("title".into(), Value::String(login.into()))]);
-    state.cache.lock().await.insert(
-        ("o".into(), "r".into(), 42),
-        Arc::new(Mutex::new(Some(Entry {
+    state.retained.lock().await.insert(
+        crate::retention::key("pr", b"o/r/42"),
+        crate::retention::CachedSlot::Pr(Arc::new(Mutex::new(Some(Entry {
             etag: None,
             fields,
-            validated: Instant::now(),
-        }))),
+            validated: Some(Instant::now()),
+            ttl: Duration::MAX,
+        })))),
+        512,
     );
     let server = Server::bind(
         SocketAddr::from(([127, 0, 0, 1], 0)),
