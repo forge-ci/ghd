@@ -17,8 +17,8 @@ The recurring review issue stays open as a maintenance responsibility.
 
 | Issue | Capability | State |
 |---|---|---|
-| #7 | Host and credential isolation | Implemented and verified; awaiting integration PR |
-| #8 | gh passthrough and mutation coherence | Pending |
+| #7 | Host and credential isolation | Implemented and verified in 646f5db; draft PR #18 |
+| #8 | gh passthrough and mutation coherence | Implemented and verified; draft PR #18 |
 | #9 | Expanded resource and collection reads | Pending |
 | #10 | General REST cache and revalidation | Pending |
 | #11 | Bounded durable cache and restart invalidation | Pending |
@@ -72,3 +72,31 @@ own focused regression and implementation evidence.
 Before delivery, fetch and rebase onto `origin/main`, resolve conflicts, run
 the required checks against the rebased tree, reconcile GitHub issue states
 and verify a clean checkout with no temporary artifacts left behind.
+
+## Passthrough and mutation coherence (#8)
+
+RED: a legal leading fragment hid a later mutation from the previous prefix
+classifier. The focused daemon regression failed before replacing that code.
+The implementation uses graphql-parser 0.4.1 with explicit operation selection.
+The shared write journal fences both cache tiers across subprocess writes,
+concurrent reads, uncertain outcomes and daemon restarts. The transport no
+longer retries a connected request when its reply is lost.
+
+Initial targeted core, daemon and CLI tests passed, including the controlled
+write/read overlap and uncertain-write restart schedule. The passthrough
+fixture verifies literal arguments, stdin, stderr and exit 7 without real gh
+or GitHub. The fixture's failed write leaves a journal fence, as required.
+The lost-reply and stdin/envelope regressions pass. `./ci.py all` completed
+with ALL GATES PASSED, including installed-wheel Python tests and backend smoke.
+The final CLI suite passes all seven tests, including explicit auth/config
+passthrough without credentials or state creation and the updated help surface.
+The read-only review is clean and its focused mutation regression passes.
+Contract precheck reports zero violations with its existing local-only
+needs-review items retained.
+
+One build restored stale platform metadata that omitted a function present in
+source. Only local ghd-platform build artifacts were moved to trash, then
+`ZCCACHE_DISABLE=1 ./ci.py build` succeeded. The following normal-cache full
+gate run also passed; no gate was relaxed to work around this observation.
+The journal's process-crash fence is implemented here; power-loss validation
+and durable cache custody remain part of #11 rather than being claimed done.

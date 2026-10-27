@@ -6,6 +6,7 @@
 //! mutation always goes upstream and empties the query cache, so no read
 //! issued after a write sees a pre-write answer.
 
+pub use ghd_core::operation::{Operation, classify};
 use ghd_core::proto::GraphqlVariable;
 use kernal_api::json::{self, Layout, Value};
 use std::collections::BTreeMap;
@@ -13,7 +14,21 @@ use std::collections::BTreeMap;
 /// The JSON request body GitHub's `/graphql` takes. Also the cache key:
 /// the same query with the same variables encodes to the same bytes.
 pub fn body(query: &str, variables: &[GraphqlVariable]) -> Result<Vec<u8>, String> {
+    body_operation(query, variables, "")
+}
+
+pub fn body_operation(
+    query: &str,
+    variables: &[GraphqlVariable],
+    operation_name: &str,
+) -> Result<Vec<u8>, String> {
     let mut doc = BTreeMap::new();
+    if !operation_name.is_empty() {
+        doc.insert(
+            "operationName".to_string(),
+            Value::String(operation_name.to_string()),
+        );
+    }
     doc.insert("query".to_string(), Value::String(query.to_string()));
     if !variables.is_empty() {
         let vars = variables
@@ -41,14 +56,9 @@ fn value(v: &GraphqlVariable) -> Value {
     }
 }
 
-/// Whether the document is a mutation (never cached).
-pub fn is_mutation(query: &str) -> bool {
-    let code = query
-        .lines()
-        .map(|line| line.split('#').next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join(" ");
-    code.trim_start().starts_with("mutation")
+#[cfg(test)]
+fn is_mutation(query: &str) -> bool {
+    !matches!(classify(query, None), Ok(Operation::Read))
 }
 
 /// The message of the response's `errors`, if it has any.
@@ -114,6 +124,19 @@ mod tests {
     }
 
     #[test]
+    fn operation_name_is_part_of_the_cache_key_and_request_envelope() {
+        let doc = "query A { x } mutation B { y }";
+        let read = body_operation(doc, &[], "A").expect("read body");
+        let write = body_operation(doc, &[], "B").expect("write body");
+        assert_ne!(read, write);
+        let Value::Object(read) = json::parse(&read).expect("JSON") else {
+            panic!("object")
+        };
+        assert_eq!(read["operationName"], Value::String("A".into()));
+        assert!(!read.contains_key("variables"));
+    }
+
+    #[test]
     fn no_variables_sends_no_variables_member() {
         let b = body("{viewer{login}}", &[]).expect("encodes");
         assert!(!String::from_utf8_lossy(&b).contains("variables"));
@@ -125,6 +148,17 @@ mod tests {
         assert!(is_mutation("  # note\n mutation M($id:ID!){ x }"));
         assert!(!is_mutation("query { mutationQueue }"));
         assert!(!is_mutation("{ repository { id } }"));
+    }
+
+    #[test]
+    fn fragment_and_other_operations_cannot_hide_a_mutation() {
+        // #8: GraphQL documents need parsing; a leading fragment is legal.
+        assert!(is_mutation(
+            "fragment UserFields on User { id } mutation Write { updateUser { ...UserFields } }"
+        ));
+        assert!(is_mutation(
+            "query Read { viewer { login } } mutation Write { updateUser { id } }"
+        ));
     }
 
     #[test]

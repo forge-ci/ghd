@@ -15,6 +15,9 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            if let Some(code) = ghd::compat::exit_code(&e) {
+                std::process::exit(code);
+            }
             eprintln!("ghd: {e}");
             ExitCode::FAILURE
         }

@@ -3,7 +3,7 @@
 use crate::client;
 use crate::proto::{GraphqlRequest, GraphqlResponse, GraphqlVariable};
 use prost::Message;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 fn invalid(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -17,6 +17,7 @@ pub fn parse(
 ) -> io::Result<GraphqlRequest> {
     let mut query = None;
     let mut hostname = String::new();
+    let mut operation_name = String::new();
     let mut variables = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -51,6 +52,8 @@ pub fn parse(
         };
         if name == "query" {
             query = Some(value);
+        } else if name == "operationName" {
+            operation_name = value;
         } else {
             variables.push(GraphqlVariable {
                 name: name.into(),
@@ -64,12 +67,21 @@ pub fn parse(
         query,
         variables,
         hostname,
+        operation_name,
     })
 }
 
 /// `ghd api graphql ...`: print the body; fail (exit 1) when it has errors.
 pub fn run(args: &[&str]) -> io::Result<()> {
-    let request = parse(args, |path| std::fs::read_to_string(path))?;
+    let request = parse(args, |path| {
+        if path == "-" {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input)?;
+            Ok(input)
+        } else {
+            std::fs::read_to_string(path)
+        }
+    })?;
     let reply = request_reply(&request)?;
     if std::env::var_os("GHD_DEBUG").is_some() {
         io::stderr().write_all(format!("ghd: {}\n", reply.source).as_bytes())?;
@@ -148,6 +160,17 @@ mod tests {
     fn typed_at_file_reads_the_file() {
         let req = parse(&["-F", "query=@q.graphql"], |p| Ok(format!("<{p}>"))).expect("parses");
         assert_eq!(req.query, "<q.graphql>");
+    }
+
+    #[test]
+    fn operation_name_is_envelope_metadata_and_stdin_is_a_typed_file() {
+        let req = parse(&["-F", "query=@-", "-f", "operationName=Read"], |path| {
+            assert_eq!(path, "-");
+            Ok("query Read { viewer { login } }".into())
+        })
+        .expect("request");
+        assert_eq!(req.operation_name, "Read");
+        assert!(req.variables.is_empty());
     }
 
     #[test]

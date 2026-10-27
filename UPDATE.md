@@ -77,3 +77,17 @@ references removed concepts is worse than no procedure.
 - Support host-qualified repositories, GH_REPO and GraphQL --hostname; reject
   conflicting selectors and missing credentials before shared cache access.
 - Preserve Python/CLI parity and pin resolved credentials when spawning.
+
+## ghx parity: passthrough and mutation coherence (#8)
+
+- Forward real-gh arguments and stdin/stdout/stderr, including rendering and
+  stdin consumers, while preserving exit status and Unix signal conventions.
+- Use a shared write journal before mutations/unknown commands; every daemon
+  fences cached reads while writes are active or uncertain and checks the
+  generation before returning a result. Both cache tiers are invalidated.
+- Never retry a connected request after dispatch. Only absent/refused endpoints
+  and explicit pre-routing authorization rejections permit rediscovery.
+- Parse GraphQL documents and operationName instead of recognizing a mutation
+  by a string prefix. Malformed and ambiguous operations fail at the boundary.
+- Add GHD_GH_PATH and an absolute GHD_STATE_DIR override for explicit executable
+  selection, private state isolation and deterministic tests.

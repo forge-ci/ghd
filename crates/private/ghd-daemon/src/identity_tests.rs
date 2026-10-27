@@ -12,6 +12,11 @@ async fn cached_server(identity: &Identity, login: &str) -> TestServer {
     // Cache-isolation fixtures must never expire into a real upstream call,
     // regardless of GHD_FRESH_MS or scheduling delays on a busy runner.
     state.fresh_for = Duration::MAX;
+    state.journal = ghd_core::coherence::Journal::at(std::env::temp_dir().join(format!(
+        "ghd-cache-only-{}-{}",
+        std::process::id(),
+        identity.key()
+    )));
     Arc::get_mut(&mut state.upstream)
         .expect("unshared upstream")
         .disable_network_for_test();

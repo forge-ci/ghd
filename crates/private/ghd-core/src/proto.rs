@@ -41,6 +41,8 @@ pub struct GraphqlRequest {
     pub variables: Vec<GraphqlVariable>,
     #[prost(string, tag = "3")]
     pub hostname: String,
+    #[prost(string, tag = "4")]
+    pub operation_name: String,
 }
 
 /// One `-f name=value` (raw string) or `-F name=value` (typed) argument.

@@ -66,6 +66,8 @@ struct State {
     fresh: AtomicU64,
     started: Instant,
     fresh_for: Duration,
+    journal: ghd_core::coherence::Journal,
+    cache_epoch: Mutex<u64>,
 }
 
 fn new_state(identity: &ghd_core::identity::Identity, token: String) -> io::Result<State> {
@@ -81,7 +83,31 @@ fn new_state(identity: &ghd_core::identity::Identity, token: String) -> io::Resu
         fresh: AtomicU64::new(0),
         started: Instant::now(),
         fresh_for: fresh_for(),
+        journal: ghd_core::coherence::Journal::global()?,
+        cache_epoch: Mutex::new(0),
     })
+}
+
+async fn sync_epoch(state: &State, epoch: u64) -> io::Result<()> {
+    let mut current = state.cache_epoch.lock().await;
+    if *current > epoch {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "GitHub changed while starting the read; retry",
+        ));
+    }
+    if *current != epoch {
+        state.cache.lock().await.clear();
+        state.graphql.lock().await.clear();
+        *current = epoch;
+    }
+    Ok(())
+}
+
+async fn read_epoch(state: &State) -> io::Result<u64> {
+    let epoch = state.journal.epoch()?;
+    sync_epoch(state, epoch).await?;
+    Ok(epoch)
 }
 
 pub fn run() -> io::Result<()> {
@@ -181,6 +207,10 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
         }
         wanted.insert(field.clone());
     }
+    let epoch = match read_epoch(state).await {
+        Ok(epoch) => epoch,
+        Err(error) => return failure(409, error.to_string()),
+    };
     state.reads.fetch_add(1, Ordering::Relaxed);
     let slot = {
         let mut cache = state.cache.lock().await;
@@ -191,7 +221,11 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
         )
     };
     let mut entry = slot.lock().await;
-    match read(state, &req, &wanted, &mut entry).await {
+    let result = read(state, &req, &wanted, &mut entry).await;
+    if let Err(error) = state.journal.confirm(epoch) {
+        return failure(409, error.to_string());
+    }
+    match result {
         Ok((fields, source)) => {
             let doc: BTreeMap<String, Value> = wanted
                 .iter()
@@ -283,6 +317,20 @@ fn graphql_answer(json: Vec<u8>, source: &str) -> Response {
     )
 }
 
+fn graphql_http_answer(status: u16, json: Vec<u8>, source: &str) -> Response {
+    if status >= 400 {
+        return graphql_reply(
+            200,
+            &GraphqlResponse {
+                json,
+                source: source.into(),
+                error: format!("GitHub returned HTTP {status}"),
+            },
+        );
+    }
+    graphql_answer(json, source)
+}
+
 async fn graphql(state: &State, body: &[u8]) -> Response {
     let failed = |status, error: String| {
         graphql_reply(
@@ -301,18 +349,41 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     {
         return failed(400, "request host does not match daemon identity".into());
     }
-    let upstream_body = match gql::body(&req.query, &req.variables) {
+    let upstream_body = match gql::body_operation(&req.query, &req.variables, &req.operation_name) {
         Ok(b) => b,
         Err(e) => return failed(400, e),
     };
-    if gql::is_mutation(&req.query) {
-        // A write: never cached, and no read after it may see an older answer.
+    let operation = match gql::classify(
+        &req.query,
+        (!req.operation_name.is_empty()).then_some(req.operation_name.as_str()),
+    ) {
+        Ok(operation) => operation,
+        Err(error) => return failed(400, error.to_string()),
+    };
+    if operation == gql::Operation::Write {
+        let intent = match state.journal.begin() {
+            Ok(intent) => intent,
+            Err(error) => return failed(409, error.to_string()),
+        };
+        state.cache.lock().await.clear();
         state.graphql.lock().await.clear();
         return match state.upstream.graphql_raw(&upstream_body).await {
-            Ok((_, json)) => graphql_answer(json, "fetched"),
-            Err(e) => failed(502, e),
+            Ok((status, json)) => {
+                if status < 500
+                    && let Err(error) = intent.finish()
+                {
+                    return failed(500, error.to_string());
+                }
+                graphql_http_answer(status, json, "fetched")
+            }
+            // Keep the intent when upstream completion is uncertain.
+            Err(error) => failed(502, error),
         };
     }
+    let epoch = match read_epoch(state).await {
+        Ok(epoch) => epoch,
+        Err(error) => return failed(409, error.to_string()),
+    };
     let slot = {
         let mut cache = state.graphql.lock().await;
         if cache.len() >= GRAPHQL_CACHE_MAX {
@@ -326,15 +397,21 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
         && at.elapsed() < state.fresh_for
     {
         state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
-        return graphql_answer(json.clone(), "fresh");
+        return match state.journal.confirm(epoch) {
+            Ok(()) => graphql_answer(json.clone(), "fresh"),
+            Err(error) => failed(409, error.to_string()),
+        };
     }
     match state.upstream.graphql_raw(&upstream_body).await {
         Ok((status, json)) => {
+            if let Err(error) = state.journal.confirm(epoch) {
+                return failed(409, error.to_string());
+            }
             // Only a clean answer is reused; errors (rate limits) are not.
             if status == 200 && gql::errors(&json).is_none() {
                 *entry = Some((json.clone(), Instant::now()));
             }
-            graphql_answer(json, "fetched")
+            graphql_http_answer(status, json, "fetched")
         }
         Err(e) => failed(502, e),
     }
@@ -376,3 +453,7 @@ fn stats(state: &State) -> Response {
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod identity_tests;
+
+#[cfg(test)]
+#[path = "coherence_tests.rs"]
+mod coherence_tests;

@@ -5,6 +5,16 @@ use std::path::{Path, PathBuf};
 
 /// The per-user directory ghd keeps its endpoint file and daemon log in.
 pub fn state_dir() -> io::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("GHD_STATE_DIR") {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GHD_STATE_DIR must be absolute",
+            ));
+        }
+        return Ok(path);
+    }
     Ok(crate::platform_imp::fs::state_base()?.join("ghd"))
 }
 

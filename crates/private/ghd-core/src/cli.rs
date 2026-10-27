@@ -10,6 +10,7 @@ pub const USAGE: &str = "\
 ghd: a cached, batched, budget-aware gateway for gh reads
 
 usage:
+  ghd gh <args...>                                forward to real gh safely
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
   ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
   ghd stats                                           what the daemon saved
@@ -23,10 +24,39 @@ pub fn run(args: &[String]) -> io::Result<()> {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
-        ["pr", "view", rest @ ..] => pr_view(rest),
-        ["api", "graphql", rest @ ..] => crate::graphql::run(rest),
-        _ => Err(invalid(USAGE)),
+        ["gh", rest @ ..] => crate::compat::run(rest),
+        ["pr", "view", rest @ ..] if native_pr_args(rest) => pr_view(rest),
+        ["api", "graphql", rest @ ..] if native_graphql_args(rest) => crate::graphql::run(rest),
+        _ => crate::compat::run(&args),
     }
+}
+
+fn native_pr_args(args: &[&str]) -> bool {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match *arg {
+            "-R" | "--repo" | "--json" | "--hostname" => {
+                it.next();
+            }
+            value if !value.starts_with('-') => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn native_graphql_args(args: &[&str]) -> bool {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match *arg {
+            "-f" | "--raw-field" | "-F" | "--field" | "--hostname" => {
+                it.next();
+            }
+            value if (value.starts_with("-f") || value.starts_with("-F")) && value.len() > 2 => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn invalid(message: &str) -> io::Error {

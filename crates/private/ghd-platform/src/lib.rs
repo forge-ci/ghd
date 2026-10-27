@@ -16,17 +16,17 @@
 //!
 //! Pattern and wording adapted from soldr's `crates/soldr-platform/src/
 //! lib.rs` (zackees/soldr issues #2493, #2498) and kernal-api's
-//! `docs/platform-boundary.md`. This crate implements one real capability
-//! (`host::os_name` + `host::exe_suffix`) rather than soldr's full
-//! process/fs/ipc/executable/host surface — enough to prove the boundary
-//! shape without a second native SDK dependency in the template.
+//! `docs/platform-boundary.md`. This crate exposes host naming, private
+//! state storage and process operations. Native subprocess status conversion
+//! stays here: Unix signals map to the shell's 128+signal convention, while
+//! Windows preserves its process exit code. Applications never select an OS
+//! to implement those rules themselves.
 
 use std::cfg_select;
 
 mod platform;
 
-/// The cfg-free facade. See [`platform::host`] for the one capability this
-/// crate exposes.
+/// The cfg-free facade for host names, private state and process operations.
 pub use platform::{fs, host, process};
 
 cfg_select! {

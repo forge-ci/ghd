@@ -16,10 +16,13 @@ pub(crate) use ghd_platform as platform;
 
 pub mod cli;
 pub mod client;
+pub mod coherence;
+pub mod compat;
 pub mod endpoint;
 pub mod fields;
 pub mod graphql;
 pub mod identity;
+pub mod operation;
 pub mod proto;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.

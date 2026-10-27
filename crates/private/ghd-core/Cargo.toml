@@ -21,3 +21,4 @@ anyhow = { workspace = true }
 ghd-platform = { path = "../ghd-platform" }
 prost = { workspace = true }
 kernal-api = { workspace = true }
+graphql-parser = { workspace = true }

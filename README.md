@@ -88,6 +88,7 @@ fresh window, which is exactly what an agent's re-check loop hits.
 ```text
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
 ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
+ghd gh <args...>                                    forward to real gh safely
 ghd stats                                           what the daemon saved
 ghd daemon                                          run the daemon (auto-started)
 ghd --version | --help
@@ -119,10 +120,40 @@ ghd --version | --help
 **`ghd daemon`** runs the daemon in the foreground. You rarely need it: one
 start lock means concurrent cold clients start exactly one daemon.
 
+## Forwarding commands and writes
+
+`ghd gh <args...>` forwards arguments and the original stdin/stdout/stderr to
+real GitHub CLI. Unimplemented top-level commands also pass through. Native
+commands use this route for unsupported rendering flags such as `--jq` and
+`--template`; a request already dispatched to a daemon is never replayed as a
+fallback. `GHD_GH_PATH` selects a real `gh` executable explicitly. Recursive
+shims are rejected.
+
+Known safe reads pass through without a write fence. Mutations and unknown
+commands record an intent in the shared write journal before dispatch. Every
+daemon checks the journal before and after cached reads. A completed write
+advances the generation and invalidates both PR and raw GraphQL caches,
+including results still in flight. This also works when a daemon was stopped
+while a subprocess performed the write.
+
+A failed, interrupted or uncertain write leaves an intent visible across
+restarts. Cached reads then fail explicitly rather than silently returning
+pre-write data. This conservative policy includes nonzero subprocess exits;
+`pr checks` pending exit 8 is a known read and does not create an intent.
+Do not remove the journal to bypass an unresolved write: confirm the writer's
+completion before recovery. The cache-management recovery command is being
+implemented with the lifecycle controls under issue #14.
+
+Native GraphQL requests parse the complete document, honor `operationName`
+and refuse malformed, ambiguous or subscription operations before upstream
+execution. Typed `-F query=@-` reads stdin, as does real gh's passthrough path.
+
 ## Configuration
 
 | variable | effect |
 |---|---|
+| `GHD_STATE_DIR` | absolute private state root override; invalid relative paths fail |
+| `GHD_GH_PATH` | real GitHub CLI executable for passthrough and credential lookup |
 | `GHD_FRESH_MS` | fresh window in milliseconds (default 2000), read once at daemon start |
 | `GHD_DEBUG` | when set, prints which step (`fresh`, `revalidated`, `fetched`) answered each read |
 | `GHD_EXE` | the `ghd` executable used to start the daemon, if not the current one |

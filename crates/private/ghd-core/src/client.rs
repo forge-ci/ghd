@@ -1,6 +1,7 @@
 //! One std-only HTTP/1.1 call to the loopback daemon, so a warm `ghd`
 //! invocation builds no runtime and no TLS stack. When nothing answers, the
-//! client starts the daemon (once, under a lock) and retries.
+//! client starts the daemon once under a lock. A dispatched call is never
+//! replayed when its reply is lost.
 
 use crate::endpoint::{self, Endpoint};
 use crate::{identity::Identity, platform};
@@ -25,10 +26,17 @@ pub fn call_host(
     body: &[u8],
 ) -> io::Result<(u16, Vec<u8>)> {
     let identity = Identity::resolve(host)?;
-    match endpoint::read_for(&identity).and_then(|ep| send(&identity, &ep, method, path, body)) {
-        Ok(reply) if reply.0 != 401 => Ok(reply),
-        _ => send(&identity, &start_daemon(&identity)?, method, path, body),
+    if let Ok(endpoint) = endpoint::read_for(&identity)
+        && let Ok(stream) = TcpStream::connect(("127.0.0.1", endpoint.port))
+    {
+        // Once connected, any failure may follow dispatch. Never replay it.
+        let reply = send_connected(stream, &identity, &endpoint, method, path, body)?;
+        if reply.0 != 401 {
+            return Ok(reply);
+        }
+        // A 401 is rejected before routing and therefore safe to rediscover.
     }
+    send(&identity, &start_daemon(&identity)?, method, path, body)
 }
 
 fn send(
@@ -38,8 +46,20 @@ fn send(
     path: &str,
     body: &[u8],
 ) -> io::Result<(u16, Vec<u8>)> {
-    let mut stream = TcpStream::connect(("127.0.0.1", ep.port))?;
+    let stream = TcpStream::connect(("127.0.0.1", ep.port))?;
+    send_connected(stream, identity, ep, method, path, body)
+}
+
+fn send_connected(
+    mut stream: TcpStream,
+    identity: &Identity,
+    ep: &Endpoint,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(READ_TIMEOUT))?;
     let head = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\n\
          Content-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -51,7 +71,8 @@ fn send(
     stream.write_all(body)?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
-    parse_response(&raw)
+    parse_response(&raw).map_err(|error| io::Error::new(error.kind(),
+        format!("daemon reply lost or invalid; request may have executed and was not replayed: {error}")))
 }
 
 /// Split a complete HTTP/1.1 response into status and (de-chunked) body.
@@ -160,6 +181,80 @@ fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FixtureDir(PathBuf);
+
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            if self.0.exists() {
+                std::fs::remove_dir_all(&self.0).expect("clean client fixture");
+            }
+        }
+    }
+
+    #[test]
+    fn dispatched_reply_child() {
+        if std::env::var_os("GHD_REPLY_TEST").is_none() {
+            return;
+        }
+        let error = call_host(None, "POST", "/v1/graphql", b"fixture-dispatch-body")
+            .expect_err("lost reply");
+        assert!(error.to_string().contains("not replayed"), "{error}");
+    }
+
+    #[test]
+    fn a_lost_reply_does_not_start_a_second_dispatch() {
+        let root = std::env::temp_dir().join(format!("ghd-lost-reply-test-{}", std::process::id()));
+        assert!(!root.exists(), "fresh fixture directory");
+        let _cleanup = FixtureDir(root.clone());
+        let identity =
+            Identity::from_token("github.com", "fixture-reply-token".into()).expect("identity");
+        let directory = identity.directory(&root);
+        platform::fs::create_private_dir(&directory).expect("fixture directory");
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("port").port();
+        platform::fs::write_private(
+            &directory.join("endpoint"),
+            format!("{port} session").as_bytes(),
+        )
+        .expect("endpoint");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut received = Vec::new();
+            let mut buffer = [0; 512];
+            while !received.ends_with(b"fixture-dispatch-body") {
+                let length = stream.read(&mut buffer).expect("read request");
+                assert_ne!(length, 0);
+                received.extend_from_slice(&buffer[..length]);
+                assert!(received.len() < 4096);
+            }
+            assert!(received.starts_with(b"POST /v1/graphql"));
+            // The operation was dispatched, but its reply is lost.
+        });
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "client::tests::dispatched_reply_child",
+                "--nocapture",
+            ])
+            .env("GHD_REPLY_TEST", "1")
+            .env("GHD_STATE_DIR", &root)
+            .env("GH_HOST", "github.com")
+            .env("GH_TOKEN", "fixture-reply-token")
+            .env("GHD_EXE", root.join("must-not-be-started"))
+            .output()
+            .expect("child");
+        server.join().expect("server");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !directory.join("daemon.log").exists(),
+            "no fallback daemon was started"
+        );
+    }
 
     #[test]
     fn parses_a_content_length_response() {

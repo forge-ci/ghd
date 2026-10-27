@@ -65,3 +65,12 @@ call resolves an identity before it reads an endpoint. Endpoint directories
 are derived from the credential/host digest, and every loopback request carries
 that digest alongside the per-session bearer token. Raw credentials stay in
 memory and the daemon spawn environment; they never enter paths or logs.
+
+## Compatibility and write custody
+
+`operation.rs` parses GraphQL operation selection. `compat.rs` owns real-gh
+lookup, argument/stream forwarding and conservative command classification.
+`coherence.rs` fences cached reads through a cross-process protobuf journal.
+A pre-dispatch intent remains unresolved on uncertain/failed execution; its
+presence prevents a restart from restoring stale cache authority. A connected
+client request is never replayed automatically after its reply is lost.

@@ -69,8 +69,13 @@ impl Upstream {
     /// Cache tests must fail locally on an unexpected miss, never contact GitHub.
     #[cfg(test)]
     pub(crate) fn disable_network_for_test(&mut self) {
-        self.api = "http://127.0.0.1:0".into();
-        self.graphql_url = "http://127.0.0.1:0/graphql".into();
+        self.set_endpoint_for_test("http://127.0.0.1:0");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_endpoint_for_test(&mut self, base: &str) {
+        self.api = base.into();
+        self.graphql_url = format!("{base}/graphql");
     }
 
     /// Conditional GET. Returns `(status, etag)`; a 304 costs no budget.

@@ -162,3 +162,33 @@ before cache access. REST and GraphQL URLs derive from the selected deployment
 (public GitHub, ghe.com or Enterprise Server). Both native Python clients and
 CLI callers use the same core discovery/resolution path. Legacy unpartitioned
 endpoint files are never reused.
+
+## Write coherence and passthrough
+
+`ghd-core::compat` launches real gh without a shell, inheriting the original
+streams and arguments. Local auth/config commands and known reads are separate
+from mutations and unknown commands. A write intent precedes subprocess
+execution. A successful exit finishes it; failed/uncertain execution retains
+it, while a definite spawn failure can safely finish without remote dispatch.
+Exit codes propagate through a typed command-status error and the native CLI.
+
+`ghd-core::coherence::Journal` stores a versioned protobuf generation and
+outstanding write IDs under the private state root. File locks serialize
+journal transitions across processes; file replacement publishes each record
+atomically. The journal is shared across identities because an arbitrary gh
+alias/extension can select a different host or credential than a superficial
+argument scan would infer. It contains no credentials, repository names or
+mutation payloads. Corrupt or unresolved records fail closed.
+
+Daemon reads check the journal, synchronize their cache generation and check
+again before returning bytes. A write clears PR and raw-query maps, and a
+pre-write in-flight result cannot become authoritative after the generation
+changes. The same fence is the coherence input for future persistent caches.
+The journal currently proves process-crash custody; full durable snapshot
+storage and filesystem crash validation belong to issue #11.
+
+GraphQL classification uses an actual parser in ghd-core; operationName is
+part of both the upstream envelope and the exact query cache key. The daemon
+rejects invalid/ambiguous documents and subscriptions before execution.
+Client reconnection is restricted to pre-dispatch situations; once connected,
+a lost reply is an error rather than a second potentially mutating request.

@@ -42,7 +42,7 @@ impl Identity {
             host,
             |name| std::env::var(name).ok(),
             |host| {
-                let output = Command::new("gh")
+                let output = crate::compat::command()?
                     .args(["auth", "token", "--hostname", host])
                     .output()?;
                 if !output.status.success() {

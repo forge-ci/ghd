@@ -55,3 +55,12 @@ sentinels and one query.
 ```bash
 soldr cargo test -p ghd-daemon --locked
 ```
+
+## Write and read overlap
+
+Each read synchronizes its memory cache generation against the shared journal
+and confirms that generation before returning. Mutations invalidate both
+cache maps. Old in-flight responses cannot publish a pre-write answer as
+current. The controlled loopback schedules in `coherence_tests.rs` cover
+fragment-leading mutations, both cache tiers, an overlapping old read and an
+uncertain upstream write whose fence survives journal reopening.
