@@ -14,6 +14,9 @@ pub struct PrViewRequest {
     /// `gh pr view --json` field names.
     #[prost(string, repeated, tag = "4")]
     pub fields: Vec<String>,
+    /// Explicit hostname; empty uses GH_HOST or github.com.
+    #[prost(string, tag = "5")]
+    pub hostname: String,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -36,6 +39,8 @@ pub struct GraphqlRequest {
     pub query: String,
     #[prost(message, repeated, tag = "2")]
     pub variables: Vec<GraphqlVariable>,
+    #[prost(string, tag = "3")]
+    pub hostname: String,
 }
 
 /// One `-f name=value` (raw string) or `-F name=value` (typed) argument.

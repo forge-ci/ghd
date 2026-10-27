@@ -18,5 +18,5 @@ def pr_view(repo: str, number: int, fields: list[str]) -> dict[str, Any]:
 
     Starts the daemon (the bundled ``ghd`` binary) on first use.
     """
-    owner, name = repo.split("/", 1)
+    owner, name = repo.rsplit("/", 1)
     return json.loads(_native.pr_view(owner, name, number, fields))

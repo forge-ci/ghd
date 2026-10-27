@@ -9,8 +9,9 @@ loopback round trip.
 | File | What it owns |
 |---|---|
 | `lib.rs` | Module index, `pub(crate) use ghd_platform as platform;`, and `version_banner()` (`ghd <version> (<os>)`). |
-| `proto.rs` | prost messages: `PrViewRequest { owner, repo, number, fields }` and `PrViewResponse { json, source, error }`. Tags are stable — retire with `reserved`, never reuse. |
-| `endpoint.rs` | `Endpoint { port, token }`; `state_dir()`, `parse()`, `read()`, `write()` for `<state dir>/endpoint` (`port token`), written owner-private. |
+| `proto.rs` | prost messages: `PrViewRequest { owner, repo, number, fields, hostname }` and `PrViewResponse { json, source, error }`. Tags are stable — retire with `reserved`, never reuse. |
+| `identity.rs` | Host-bound credentials, canonical repository selectors, fingerprinted daemon directories and deployment API URLs. |
+| `endpoint.rs` | `Endpoint { port, token }`; `state_dir()`, `parse()`, `read()`, `write()` for `<state root>/identities-v1/<digest>/endpoint` (`port token`), written owner-private. |
 | `client.rs` | `call(method, path, body)`: one std `TcpStream` HTTP/1.1 request with the bearer token; `parse_response()` (Content-Length or chunked). Starts the daemon when nothing answers or the token is rejected (401). |
 | `cli.rs` | `run(args)` for every subcommand except `daemon`; `parse_pr_view()`, `pr_view_request()`, `owner_repo_from_url()`, `USAGE`. |
 | `fields.rs` | `PR_FIELDS` (the 20 `gh pr view --json` scalars ghd answers) and `valid_name()` (safe owner/repo names). |
@@ -55,3 +56,12 @@ default-repo function, and response parsing works on byte strings.
 ```bash
 soldr cargo test -p ghd-core --locked
 ```
+
+## Host and credential resolution
+
+`identity.rs` owns GitHub hostname validation, host-bound credential
+precedence, repository selector parsing and API URL construction. Every client
+call resolves an identity before it reads an endpoint. Endpoint directories
+are derived from the credential/host digest, and every loopback request carries
+that digest alongside the per-session bearer token. Raw credentials stay in
+memory and the daemon spawn environment; they never enter paths or logs.

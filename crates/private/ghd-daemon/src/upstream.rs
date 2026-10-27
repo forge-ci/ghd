@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
-const API: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!("ghd/", env!("CARGO_PKG_VERSION"));
 
 pub type Fields = BTreeMap<String, Value>;
@@ -33,6 +32,8 @@ pub struct Counters {
 pub struct Upstream {
     http: http::Client,
     auth: String,
+    api: String,
+    graphql_url: String,
     pub counters: Counters,
     batches: Mutex<HashMap<(String, String), Batch>>,
     window: Duration,
@@ -46,21 +47,30 @@ struct Batch {
 }
 
 impl Upstream {
-    pub fn new(token: String, window: Duration) -> io::Result<Self> {
+    pub fn new(identity: &ghd_core::identity::Identity, window: Duration) -> io::Result<Self> {
         let limits = http::Limits {
             max_body_bytes: 32 * 1024 * 1024,
             // Renamed/transferred repos answer 301; the hop stays on
-            // api.github.com, so the Authorization header is kept.
+            // the same API origin, so the Authorization header is kept.
             max_redirects: 3,
             ..http::Limits::default()
         };
         Ok(Self {
             http: http::Client::new(limits)?,
-            auth: format!("Bearer {token}"),
+            auth: format!("Bearer {}", identity.token()),
+            api: identity.api_base(),
+            graphql_url: identity.graphql_url(),
             counters: Counters::default(),
             batches: Mutex::new(HashMap::new()),
             window,
         })
+    }
+
+    /// Cache tests must fail locally on an unexpected miss, never contact GitHub.
+    #[cfg(test)]
+    pub(crate) fn disable_network_for_test(&mut self) {
+        self.api = "http://127.0.0.1:0".into();
+        self.graphql_url = "http://127.0.0.1:0/graphql".into();
     }
 
     /// Conditional GET. Returns `(status, etag)`; a 304 costs no budget.
@@ -69,7 +79,7 @@ impl Upstream {
         path: &str,
         etag: Option<&str>,
     ) -> io::Result<(u16, Option<String>)> {
-        let url = format!("{API}{path}");
+        let url = format!("{}{path}", self.api);
         let mut headers = vec![
             ("Authorization", self.auth.as_str()),
             ("User-Agent", USER_AGENT),
@@ -166,7 +176,7 @@ impl Upstream {
 
     /// Send a caller's `/graphql` body as-is; `(status, response body)`.
     pub async fn graphql_raw(&self, body: &[u8]) -> Result<(u16, Vec<u8>), String> {
-        let url = format!("{API}/graphql");
+        let url = self.graphql_url.clone();
         let headers = [
             ("Authorization", self.auth.as_str()),
             ("User-Agent", USER_AGENT),
@@ -201,7 +211,7 @@ impl Upstream {
         let mut doc = BTreeMap::new();
         doc.insert("query".to_string(), Value::String(query.to_string()));
         let body = json::encode(&Value::Object(doc), Layout::Compact).map_err(|e| e.to_string())?;
-        let url = format!("{API}/graphql");
+        let url = self.graphql_url.clone();
         let headers = [
             ("Authorization", self.auth.as_str()),
             ("User-Agent", USER_AGENT),

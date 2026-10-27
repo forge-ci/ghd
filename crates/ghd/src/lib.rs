@@ -16,7 +16,7 @@
 //! `#[cfg(feature = "daemon")]` only decides whether a name exists, never
 //! what it does.
 
-pub use ghd_core::{cli, client, endpoint, fields, proto, version_banner};
+pub use ghd_core::{cli, client, endpoint, fields, identity, proto, version_banner};
 
 #[cfg(feature = "daemon")]
 pub use ghd_daemon::run as run_daemon;

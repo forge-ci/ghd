@@ -3,7 +3,7 @@
 //! client starts the daemon (once, under a lock) and retries.
 
 use crate::endpoint::{self, Endpoint};
-use crate::platform;
+use crate::{identity::Identity, platform};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -15,19 +15,36 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `(status, body)` from the daemon, starting it if it is not running.
 pub fn call(method: &str, path: &str, body: &[u8]) -> io::Result<(u16, Vec<u8>)> {
-    match endpoint::read().and_then(|ep| send(&ep, method, path, body)) {
+    call_host(None, method, path, body)
+}
+
+pub fn call_host(
+    host: Option<&str>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
+    let identity = Identity::resolve(host)?;
+    match endpoint::read_for(&identity).and_then(|ep| send(&identity, &ep, method, path, body)) {
         Ok(reply) if reply.0 != 401 => Ok(reply),
-        _ => send(&start_daemon()?, method, path, body),
+        _ => send(&identity, &start_daemon(&identity)?, method, path, body),
     }
 }
 
-fn send(ep: &Endpoint, method: &str, path: &str, body: &[u8]) -> io::Result<(u16, Vec<u8>)> {
+fn send(
+    identity: &Identity,
+    ep: &Endpoint,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> io::Result<(u16, Vec<u8>)> {
     let mut stream = TcpStream::connect(("127.0.0.1", ep.port))?;
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\n\
          Content-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         ep.token,
+        identity.key(),
         body.len()
     );
     stream.write_all(head.as_bytes())?;
@@ -78,9 +95,9 @@ fn dechunk(mut data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn healthy() -> Option<Endpoint> {
-    let ep = endpoint::read().ok()?;
-    matches!(send(&ep, "GET", "/v1/health", &[]), Ok((200, _))).then_some(ep)
+fn healthy(identity: &Identity) -> Option<Endpoint> {
+    let ep = endpoint::read_for(identity).ok()?;
+    matches!(send(identity, &ep, "GET", "/v1/health", &[]), Ok((200, _))).then_some(ep)
 }
 
 /// The `ghd` executable that runs the daemon: `$GHD_EXE`, this process when
@@ -110,25 +127,26 @@ fn daemon_exe() -> io::Result<PathBuf> {
 /// Launch `ghd daemon` detached and wait, bounded, for it to answer. An
 /// exclusive lock makes concurrent cold clients start exactly one daemon:
 /// the rest wait on the lock, then find it healthy.
-fn start_daemon() -> io::Result<Endpoint> {
-    let dir = endpoint::state_dir()?;
+fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
+    let dir = endpoint::directory(identity)?;
     platform::fs::create_private_dir(&dir)?;
     let lock = std::fs::File::create(dir.join("start.lock"))?;
     lock.lock()?;
-    if let Some(ep) = healthy() {
+    if let Some(ep) = healthy(identity) {
         return Ok(ep);
     }
     let log = std::fs::File::create(dir.join("daemon.log"))?;
-    platform::process::spawn_detached(
-        Command::new(daemon_exe()?)
-            .arg("daemon")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log),
-    )?;
+    let mut command = Command::new(daemon_exe()?);
+    identity.configure_child(&mut command);
+    command
+        .arg("daemon")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    platform::process::spawn_detached(&mut command)?;
     let deadline = Instant::now() + START_DEADLINE;
     while Instant::now() < deadline {
-        if let Some(ep) = healthy() {
+        if let Some(ep) = healthy(identity) {
             return Ok(ep);
         }
         std::thread::sleep(Duration::from_millis(25));

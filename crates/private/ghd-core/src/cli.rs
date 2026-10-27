@@ -11,7 +11,7 @@ ghd: a cached, batched, budget-aware gateway for gh reads
 
 usage:
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
-  ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
+  ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
   ghd stats                                           what the daemon saved
   ghd daemon                                          run the daemon (auto-started)
   ghd --version | --help";
@@ -53,10 +53,24 @@ pub fn parse_pr_view(
     let mut number = None;
     let mut repo = None;
     let mut fields = None;
+    let mut host = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match *arg {
-            "-R" | "--repo" => repo = it.next().map(|s| s.to_string()),
+            "-R" | "--repo" => {
+                let value = it.next().ok_or_else(|| invalid("--repo needs a value"))?;
+                if repo.replace(value.to_string()).is_some() {
+                    return Err(invalid("repeated repository selector"));
+                }
+            }
+            "--hostname" => {
+                let value = it
+                    .next()
+                    .ok_or_else(|| invalid("--hostname needs a value"))?;
+                if host.replace(crate::identity::hostname(value)?).is_some() {
+                    return Err(invalid("repeated hostname selector"));
+                }
+            }
             "--json" => fields = it.next().map(|s| s.to_string()),
             other => {
                 number = Some(
@@ -74,13 +88,18 @@ pub fn parse_pr_view(
         Some(r) => r,
         None => default_repo()?,
     };
-    let (owner, name) = repo
-        .split_once('/')
-        .ok_or_else(|| invalid("-R must be owner/repo"))?;
+    let (repo_host, owner, name) = crate::identity::repository(&repo)?;
+    if let (Some(explicit), Some(bound)) = (&host, &repo_host)
+        && explicit != bound
+    {
+        return Err(invalid("repository and --hostname select different hosts"));
+    }
+    let hostname = host.or(repo_host).unwrap_or_default();
     Ok(PrViewRequest {
-        owner: owner.into(),
-        repo: name.into(),
+        owner,
+        repo: name,
         number,
+        hostname,
         fields: fields
             .split(',')
             .map(str::trim)
@@ -103,7 +122,12 @@ fn pr_view(args: &[&str]) -> io::Result<()> {
 
 /// One `pr view` round trip; the Python binding calls this directly.
 pub fn pr_view_request(request: &PrViewRequest) -> io::Result<PrViewResponse> {
-    let (status, body) = client::call("POST", "/v1/pr/view", &request.encode_to_vec())?;
+    let (status, body) = client::call_host(
+        (!request.hostname.is_empty()).then_some(request.hostname.as_str()),
+        "POST",
+        "/v1/pr/view",
+        &request.encode_to_vec(),
+    )?;
     let reply = PrViewResponse::decode(body.as_slice())
         .map_err(|_| io::Error::other(format!("daemon HTTP {status}: undecodable reply")))?;
     if reply.error.is_empty() {
@@ -115,20 +139,28 @@ pub fn pr_view_request(request: &PrViewRequest) -> io::Result<PrViewResponse> {
 
 /// `owner/repo` from the `origin` remote, as gh infers it.
 fn repo_from_git() -> io::Result<String> {
+    if let Ok(repo) = std::env::var("GH_REPO") {
+        return Ok(repo);
+    }
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .output()?;
-    owner_repo_from_url(String::from_utf8_lossy(&output.stdout).trim())
-        .ok_or_else(|| io::Error::other("no github origin remote; pass -R owner/repo"))
+    if !output.status.success() {
+        return Err(io::Error::other("no origin remote; pass -R owner/repo"));
+    }
+    let remote = String::from_utf8_lossy(&output.stdout);
+    let (host, owner, name) = crate::identity::repository(remote.trim())?;
+    Ok(host.map_or_else(
+        || format!("{owner}/{name}"),
+        |host| format!("{host}/{owner}/{name}"),
+    ))
 }
 
+/// Legacy GitHub.com-only helper; general host-aware resolution uses
+/// `identity::repository` so this compatibility API retains its old scope.
 pub fn owner_repo_from_url(url: &str) -> Option<String> {
-    let path = url
-        .strip_prefix("git@github.com:")
-        .or_else(|| url.strip_prefix("https://github.com/"))
-        .or_else(|| url.strip_prefix("ssh://git@github.com/"))?;
-    let path = path.trim_end_matches('/').trim_end_matches(".git");
-    path.contains('/').then(|| path.to_string())
+    let (host, owner, repo) = crate::identity::repository(url).ok()?;
+    (host.as_deref() == Some("github.com")).then(|| format!("{owner}/{repo}"))
 }
 
 #[cfg(test)]
@@ -148,6 +180,39 @@ mod tests {
             ("o", "r", 12)
         );
         assert_eq!(req.fields, ["state", "title"]);
+    }
+
+    #[test]
+    fn repository_host_and_explicit_host_must_agree() {
+        let req = parse_pr_view(
+            &["12", "-R", "GIT.EXAMPLE.COM/o/r", "--json", "state"],
+            no_git,
+        )
+        .expect("parses");
+        assert_eq!(req.hostname, "git.example.com");
+        assert!(
+            parse_pr_view(
+                &[
+                    "12",
+                    "-R",
+                    "git.example.com/o/r",
+                    "--hostname",
+                    "other.example.com",
+                    "--json",
+                    "state"
+                ],
+                no_git
+            )
+            .is_err()
+        );
+        assert!(
+            parse_pr_view(&["12", "-R", "o/r", "-R", "x/y", "--json", "state"], no_git).is_err()
+        );
+        let default = parse_pr_view(&["12", "--json", "state"], || {
+            Ok("git.example.com/o/r".into())
+        })
+        .expect("default repo");
+        assert_eq!(req, default);
     }
 
     #[test]

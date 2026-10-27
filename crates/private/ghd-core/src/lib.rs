@@ -19,6 +19,7 @@ pub mod client;
 pub mod endpoint;
 pub mod fields;
 pub mod graphql;
+pub mod identity;
 pub mod proto;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.

@@ -16,9 +16,20 @@ pub fn parse(
     read_file: impl Fn(&str) -> io::Result<String>,
 ) -> io::Result<GraphqlRequest> {
     let mut query = None;
+    let mut hostname = String::new();
     let mut variables = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        if *arg == "--hostname" {
+            if !hostname.is_empty() {
+                return Err(invalid("repeated hostname selector".into()));
+            }
+            hostname = crate::identity::hostname(
+                it.next()
+                    .ok_or_else(|| invalid("--hostname needs a value".into()))?,
+            )?;
+            continue;
+        }
         let (typed, pair) = match *arg {
             "-f" | "--raw-field" => (false, it.next().copied()),
             "-F" | "--field" => (true, it.next().copied()),
@@ -49,7 +60,11 @@ pub fn parse(
         }
     }
     let query = query.ok_or_else(|| invalid("-f query=... is required".into()))?;
-    Ok(GraphqlRequest { query, variables })
+    Ok(GraphqlRequest {
+        query,
+        variables,
+        hostname,
+    })
 }
 
 /// `ghd api graphql ...`: print the body; fail (exit 1) when it has errors.
@@ -69,7 +84,12 @@ pub fn run(args: &[&str]) -> io::Result<()> {
 
 /// One `api graphql` round trip.
 pub fn request_reply(request: &GraphqlRequest) -> io::Result<GraphqlResponse> {
-    let (status, body) = client::call("POST", "/v1/graphql", &request.encode_to_vec())?;
+    let (status, body) = client::call_host(
+        (!request.hostname.is_empty()).then_some(request.hostname.as_str()),
+        "POST",
+        "/v1/graphql",
+        &request.encode_to_vec(),
+    )?;
     GraphqlResponse::decode(body.as_slice())
         .map_err(|_| io::Error::other(format!("daemon HTTP {status}: undecodable reply")))
 }
@@ -128,6 +148,30 @@ mod tests {
     fn typed_at_file_reads_the_file() {
         let req = parse(&["-F", "query=@q.graphql"], |p| Ok(format!("<{p}>"))).expect("parses");
         assert_eq!(req.query, "<q.graphql>");
+    }
+
+    #[test]
+    fn explicit_hostname_is_validated_and_not_a_graphql_variable() {
+        let req = parse(
+            &[
+                "--hostname",
+                "GIT.EXAMPLE.COM",
+                "-f",
+                "query={viewer{login}}",
+            ],
+            no_file,
+        )
+        .expect("host");
+        assert_eq!(req.hostname, "git.example.com");
+        assert!(req.variables.is_empty());
+        assert!(parse(&["--hostname", "bad/host", "-f", "query={x}"], no_file).is_err());
+        assert!(
+            parse(
+                &["--hostname", "one", "--hostname", "two", "-f", "query={x}"],
+                no_file
+            )
+            .is_err()
+        );
     }
 
     #[test]

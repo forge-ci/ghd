@@ -56,6 +56,8 @@ const GRAPHQL_CACHE_MAX: usize = 4096;
 
 struct State {
     token: String,
+    identity_key: String,
+    host: String,
     upstream: Arc<Upstream>,
     cache: Mutex<HashMap<(String, String, u64), Slot>>,
     graphql: Mutex<HashMap<Vec<u8>, GraphqlSlot>>,
@@ -63,10 +65,27 @@ struct State {
     reads: AtomicU64,
     fresh: AtomicU64,
     started: Instant,
+    fresh_for: Duration,
+}
+
+fn new_state(identity: &ghd_core::identity::Identity, token: String) -> io::Result<State> {
+    Ok(State {
+        token,
+        identity_key: identity.key().to_string(),
+        host: identity.host().to_string(),
+        upstream: Arc::new(Upstream::new(identity, BATCH_WINDOW)?),
+        cache: Mutex::new(HashMap::new()),
+        graphql: Mutex::new(HashMap::new()),
+        graphql_fresh: AtomicU64::new(0),
+        reads: AtomicU64::new(0),
+        fresh: AtomicU64::new(0),
+        started: Instant::now(),
+        fresh_for: fresh_for(),
+    })
 }
 
 pub fn run() -> io::Result<()> {
-    let gh_token = github_token()?;
+    let identity = ghd_core::identity::Identity::resolve(None)?;
     let runtime = RuntimeBuilder::multi_thread().enable_all().build()?;
     runtime.run(async move {
         let server = Server::bind(
@@ -76,17 +95,8 @@ pub fn run() -> io::Result<()> {
         .await?;
         let port = server.local_addr()?.port();
         let token = new_token().await?;
-        let state = Arc::new(State {
-            token: token.clone(),
-            upstream: Arc::new(Upstream::new(gh_token, BATCH_WINDOW)?),
-            cache: Mutex::new(HashMap::new()),
-            graphql: Mutex::new(HashMap::new()),
-            graphql_fresh: AtomicU64::new(0),
-            reads: AtomicU64::new(0),
-            fresh: AtomicU64::new(0),
-            started: Instant::now(),
-        });
-        endpoint::write(&Endpoint { port, token })?;
+        let state = Arc::new(new_state(&identity, token.clone())?);
+        endpoint::write_for(&identity, &Endpoint { port, token })?;
         eprintln!("ghd daemon listening on 127.0.0.1:{port}");
         server
             .serve(move |request| {
@@ -107,31 +117,14 @@ async fn new_token() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn github_token() -> io::Result<String> {
-    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(token) = std::env::var(var)
-            && !token.is_empty()
-        {
-            return Ok(token);
-        }
-    }
-    let output = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        .output()?;
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() || token.is_empty() {
-        return Err(io::Error::other(
-            "no GitHub token: set GH_TOKEN or run `gh auth login`",
-        ));
-    }
-    Ok(token)
-}
-
 async fn route(state: &State, request: Request) -> Response {
     let authorized = request
         .header("authorization")
         .is_some_and(|v| v == format!("Bearer {}", state.token).as_bytes());
-    if !authorized {
+    let same_identity = request
+        .header("x-ghd-identity")
+        .is_some_and(|value| value == state.identity_key.as_bytes());
+    if !authorized || !same_identity {
         return text(401, "unauthorized");
     }
     match (request.method(), request.path()) {
@@ -167,6 +160,11 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
     let Ok(req) = PrViewRequest::decode(body) else {
         return failure(400, "malformed request".into());
     };
+    if !req.hostname.is_empty()
+        && !ghd_core::identity::hostname(&req.hostname).is_ok_and(|host| host == state.host)
+    {
+        return failure(400, "request host does not match daemon identity".into());
+    }
     if !fields::valid_name(&req.owner) || !fields::valid_name(&req.repo) {
         return failure(400, "invalid owner/repo".into());
     }
@@ -224,7 +222,7 @@ async fn read(
     let covers = |e: &Entry| wanted.iter().all(|f| e.fields.contains_key(f));
     if let Some(e) = entry
         .as_ref()
-        .filter(|e| covers(e) && e.validated.elapsed() < fresh_for())
+        .filter(|e| covers(e) && e.validated.elapsed() < state.fresh_for)
     {
         state.fresh.fetch_add(1, Ordering::Relaxed);
         return Ok((e.fields.clone(), "fresh"));
@@ -298,6 +296,11 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     let Ok(req) = GraphqlRequest::decode(body) else {
         return failed(400, "malformed request".into());
     };
+    if !req.hostname.is_empty()
+        && !ghd_core::identity::hostname(&req.hostname).is_ok_and(|host| host == state.host)
+    {
+        return failed(400, "request host does not match daemon identity".into());
+    }
     let upstream_body = match gql::body(&req.query, &req.variables) {
         Ok(b) => b,
         Err(e) => return failed(400, e),
@@ -320,7 +323,7 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     // One lock per query: concurrent identical calls wait for the first.
     let mut entry = slot.lock().await;
     if let Some((json, at)) = entry.as_ref()
-        && at.elapsed() < fresh_for()
+        && at.elapsed() < state.fresh_for
     {
         state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
         return graphql_answer(json.clone(), "fresh");
@@ -369,3 +372,7 @@ fn stats(state: &State) -> Response {
         Err(e) => text(500, &e.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "identity_tests.rs"]
+mod identity_tests;

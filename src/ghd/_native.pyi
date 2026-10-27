@@ -1,4 +1,10 @@
 # Signatures only: the arguments are used by the compiled extension.
 # pylint: disable=unused-argument
 def version_banner() -> str: ...
-def pr_view(owner: str, repo: str, number: int, fields: list[str]) -> str: ...
+def pr_view(
+    owner: str,
+    repo: str,
+    number: int,
+    fields: list[str],
+    hostname: str | None = None,
+) -> str: ...

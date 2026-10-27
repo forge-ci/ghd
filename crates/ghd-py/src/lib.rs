@@ -16,13 +16,29 @@ fn version_banner() -> String {
 /// `gh pr view <number> -R owner/repo --json <fields>` through the daemon;
 /// returns the JSON document gh would print.
 #[pyfunction]
-fn pr_view(owner: String, repo: String, number: u64, fields: Vec<String>) -> PyResult<String> {
-    let request = ghd::proto::PrViewRequest {
-        owner,
-        repo,
-        number,
-        fields,
-    };
+#[pyo3(signature = (owner, repo, number, fields, hostname=None))]
+fn pr_view(
+    owner: String,
+    repo: String,
+    number: u64,
+    fields: Vec<String>,
+    hostname: Option<String>,
+) -> PyResult<String> {
+    let number = number.to_string();
+    let selector = format!("{owner}/{repo}");
+    let fields = fields.join(",");
+    let mut args = vec![
+        number.as_str(),
+        "-R",
+        selector.as_str(),
+        "--json",
+        fields.as_str(),
+    ];
+    if let Some(hostname) = hostname.as_deref() {
+        args.extend(["--hostname", hostname]);
+    }
+    let request = ghd::cli::parse_pr_view(&args, || unreachable!("explicit repository"))
+        .map_err(|e| PyOSError::new_err(e.to_string()))?;
     let reply =
         ghd::cli::pr_view_request(&request).map_err(|e| PyOSError::new_err(e.to_string()))?;
     Ok(String::from_utf8_lossy(&reply.json).into_owned())

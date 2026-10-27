@@ -128,6 +128,25 @@ start lock means concurrent cold clients start exactly one daemon.
 | `GHD_EXE` | the `ghd` executable used to start the daemon, if not the current one |
 | `GH_TOKEN` / `GITHUB_TOKEN` | the token the daemon uses; falls back to `gh auth token` |
 
+## GitHub identities and Enterprise
+
+Each call resolves the selected GitHub hostname and credential before looking
+up a daemon. Daemons, caches, startup locks and logs are partitioned by a
+cryptographic fingerprint of both values; raw tokens never appear in paths.
+Token rotation selects a new daemon. Existing legacy endpoint files are ignored.
+
+Use `GH_HOST` to select a host, `ghd pr view 12 -R git.example.com/owner/repo
+--json state` to bind a repository host, or `ghd api graphql --hostname
+git.example.com -f 'query={viewer{login}}'`. `GH_REPO` supplies the default
+repository before the origin remote. Conflicting explicit host selectors fail.
+
+For github.com and subdomains of ghe.com, credentials use `GH_TOKEN`, then
+`GITHUB_TOKEN`. Other hosts use `GH_ENTERPRISE_TOKEN`, then
+`GITHUB_ENTERPRISE_TOKEN`. If neither is set, `gh auth token --hostname HOST`
+resolves the stored credential. A missing credential fails before cache access.
+The Python `pr_view` binding uses the same resolver and accepts a
+`hostname/owner/repo` repository selector.
+
 ## Use it with agents
 
 The point of `ghd` is to sit under tools that call GitHub in loops. A real

@@ -145,3 +145,20 @@ anything from this package.
 - gates that hard-couple to the agent's session (those are hooks)
 - a `#[cfg(feature = ...)]` branch inside a private crate's shared
   logic — features gate `dep:` wiring in `template` only
+
+## Credential and host boundary
+
+`ghd-core::identity` resolves the hostname and token in the caller. Daemon
+endpoint discovery uses `identities-v1/<digest>` under the private state
+root. The digest includes a versioned domain separator, normalized hostname
+and credential. It contains no raw credential. The spawn environment pins
+the resolved identity, preventing a stored-account change between discovery
+and daemon startup from changing the cache owner.
+
+A daemon serves one identity. Its cache and batch maps are private to that
+process, and every loopback call carries the expected identity digest as
+well as the session bearer token. Requests for another identity are rejected
+before cache access. REST and GraphQL URLs derive from the selected deployment
+(public GitHub, ghe.com or Enterprise Server). Both native Python clients and
+CLI callers use the same core discovery/resolution path. Legacy unpartitioned
+endpoint files are never reused.

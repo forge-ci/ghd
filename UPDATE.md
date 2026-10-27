@@ -67,3 +67,13 @@ guidance, walk this checklist so nothing rots out of sync.
 If a step on this list stops applying (e.g., gates aren't keyed by
 GATE_ORDER anymore), update this file too. An update procedure that
 references removed concepts is worse than no procedure.
+
+## ghx parity: host and credential isolation (#7)
+
+- Resolve the caller's host and credential before daemon discovery, including
+  Enterprise token precedence and host-specific REST/GraphQL endpoints.
+- Partition endpoint, startup lock, log, cache and in-flight work by a
+  domain-separated credential/host digest, with an identity check on loopback.
+- Support host-qualified repositories, GH_REPO and GraphQL --hostname; reject
+  conflicting selectors and missing credentials before shared cache access.
+- Preserve Python/CLI parity and pin resolved credentials when spawning.

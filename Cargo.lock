@@ -304,6 +304,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ghd-platform",
+ "kernal-api",
  "prost",
 ]
 
