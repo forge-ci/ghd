@@ -36,10 +36,10 @@ pub fn call_host(
         }
         // A 401 is rejected before routing and therefore safe to rediscover.
     }
-    send(&identity, &start_daemon(&identity)?, method, path, body)
+    send_existing(&identity, &start_daemon(&identity)?, method, path, body)
 }
 
-fn send(
+pub(crate) fn send_existing(
     identity: &Identity,
     ep: &Endpoint,
     method: &str,
@@ -75,10 +75,32 @@ fn send_connected(
     path: &str,
     body: &[u8],
 ) -> io::Result<(u16, Vec<u8>)> {
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_read_timeout(Some(
+        if path.starts_with("/v1/admin/") || path == "/v1/health" {
+            Duration::from_secs(5)
+        } else {
+            READ_TIMEOUT
+        },
+    ))?;
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
+    let policy = crate::request_policy::current();
+    let controlled = policy.active() && method == "POST";
+    let path = if controlled {
+        if path == "/v2/snapshot" {
+            "/v3/snapshot".into()
+        } else {
+            path.replacen("/v1/", "/v2/", 1)
+        }
+    } else {
+        path.into()
+    };
+    let policy_header = if controlled {
+        format!("X-Ghd-Cache-Policy: {}\r\n", policy.header())
+    } else {
+        String::new()
+    };
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\nX-Ghd-Caller: {}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nX-Ghd-Identity: {}\r\nX-Ghd-Caller: {}\r\n{policy_header}\
          Content-Type: application/x-protobuf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         ep.token,
         identity.key(),
@@ -136,7 +158,11 @@ fn dechunk(mut data: &[u8]) -> Option<Vec<u8>> {
 
 fn healthy(identity: &Identity) -> Option<Endpoint> {
     let ep = endpoint::read_for(identity).ok()?;
-    matches!(send(identity, &ep, "GET", "/v1/health", &[]), Ok((200, _))).then_some(ep)
+    matches!(
+        send_existing(identity, &ep, "GET", "/v1/health", &[]),
+        Ok((200, _))
+    )
+    .then_some(ep)
 }
 
 /// The `ghd` executable that runs the daemon: `$GHD_EXE`, this process when
@@ -166,7 +192,7 @@ fn daemon_exe() -> io::Result<PathBuf> {
 /// Launch `ghd daemon` detached and wait, bounded, for it to answer. An
 /// exclusive lock makes concurrent cold clients start exactly one daemon:
 /// the rest wait on the lock, then find it healthy.
-fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
+pub(crate) fn start_daemon(identity: &Identity) -> io::Result<Endpoint> {
     let dir = endpoint::directory(identity)?;
     platform::fs::create_private_dir(&dir)?;
     let lock = std::fs::File::create(dir.join("start.lock"))?;

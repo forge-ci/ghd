@@ -34,7 +34,9 @@ class ReadResult:
     limit_reached: bool
 
 
-def gh_read(args: list[str]) -> ReadResult:
+def gh_read(
+    args: list[str], *, no_cache: bool = False, ttl_ms: int | None = None
+) -> ReadResult:
     """Run a safe, explicitly bound read using the same cache as the CLI.
 
     The result preserves pending-checks exit 8 and raw output bytes. Transport
@@ -42,7 +44,7 @@ def gh_read(args: list[str]) -> ReadResult:
     to the CLI compatibility route and are rejected by this read-only API.
     """
     # PyO3 returns the tuple declared in _native.pyi; astroid cannot infer it.
-    return ReadResult(*_native.gh_read(args))  # pylint: disable=not-an-iterable
+    return ReadResult(*_native.gh_read(args, no_cache, ttl_ms))  # pylint: disable=not-an-iterable
 
 
 @dataclass(frozen=True)

@@ -50,9 +50,23 @@ type ReadTuple = (Py<PyBytes>, Py<PyBytes>, i32, String, bool);
 /// Return stdout/stderr/status without guessing whether a nonzero read (for
 /// example pending checks, exit 8) is an exceptional transport failure.
 #[pyfunction]
-fn gh_read(py: Python<'_>, args: Vec<String>) -> PyResult<ReadTuple> {
+#[pyo3(signature = (args, no_cache=false, ttl_ms=None))]
+fn gh_read(
+    py: Python<'_>,
+    args: Vec<String>,
+    no_cache: bool,
+    ttl_ms: Option<u64>,
+) -> PyResult<ReadTuple> {
     let response = py
-        .detach(|| ghd::reads::read(&args))
+        .detach(|| {
+            ghd::request_policy::scope(
+                ghd::request_policy::Policy {
+                    bypass: no_cache,
+                    ttl_ms,
+                },
+                || ghd::reads::read(&args),
+            )
+        })
         .map_err(|error| PyOSError::new_err(error.to_string()))?;
     Ok((
         PyBytes::new(py, &response.stdout).unbind(),

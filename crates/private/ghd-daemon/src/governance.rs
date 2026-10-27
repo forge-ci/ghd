@@ -94,6 +94,9 @@ impl Control {
             metrics: Mutex::new((Counts::default(), BTreeMap::new())),
         })
     }
+    pub(crate) fn idle(&self) -> bool {
+        self.total.available_permits() == 4
+    }
     #[cfg(test)]
     pub(crate) fn available_for_test(&self) -> (usize, usize) {
         (

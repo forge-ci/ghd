@@ -32,15 +32,14 @@ impl CachedSlot {
 pub(crate) type Cache = Mutex<ghd_core::retention::Cache<CachedSlot>>;
 
 pub(crate) fn limit(name: &str, default: usize) -> io::Result<usize> {
-    match std::env::var(name) {
-        Ok(value) => value.parse().map_err(|_| {
+    match ghd_core::config::value(name)? {
+        Some(value) => value.parse().map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("{name} must be a nonnegative integer"),
             )
         }),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+        None => Ok(default),
     }
 }
 
@@ -59,6 +58,9 @@ pub(crate) fn key(namespace: &str, body: &[u8]) -> String {
 }
 
 pub(crate) async fn slot(state: &State, key: &str, candidate: CachedSlot) -> CachedSlot {
+    if crate::policy::current().bypass {
+        return candidate;
+    }
     let mut cache = state.retained.lock().await;
     if let Some(slot) = cache.get(key) {
         return slot.clone();

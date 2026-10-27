@@ -27,9 +27,9 @@ pub(crate) fn open(
     identity: &ghd_core::identity::Identity,
     journal: ghd_core::coherence::Journal,
 ) -> io::Result<Option<Arc<Store>>> {
-    match std::env::var("GHD_CACHE_DISK").as_deref() {
-        Err(std::env::VarError::NotPresent) | Ok("0") => Ok(None),
-        Ok("1") => Ok(Some(Arc::new(Store::new(
+    match ghd_core::config::value("GHD_CACHE_DISK")?.as_deref() {
+        None | Some("0") => Ok(None),
+        Some("1") => Ok(Some(Arc::new(Store::new(
             ghd_core::endpoint::directory(identity)?.join("cache-v1"),
             identity.key().into(),
             crate::retention::limit("GHD_CACHE_MAX_ENTRIES", 4096)?,
@@ -44,6 +44,9 @@ pub(crate) fn open(
 }
 
 async fn load(state: &State, key: &str, epoch: u64) -> io::Result<Option<Body>> {
+    if crate::policy::current().bypass {
+        return Ok(None);
+    }
     let Some(store) = &state.disk else {
         return Ok(None);
     };
@@ -58,6 +61,9 @@ async fn load(state: &State, key: &str, epoch: u64) -> io::Result<Option<Body>> 
 }
 
 async fn save(state: &State, key: &str, epoch: u64, body: Body) -> io::Result<()> {
+    if crate::policy::current().bypass {
+        return Ok(());
+    }
     let Some(store) = &state.disk else {
         return Ok(());
     };

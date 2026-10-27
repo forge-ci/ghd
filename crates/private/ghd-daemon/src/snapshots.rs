@@ -124,8 +124,9 @@ async fn run(state: &State, request: SnapshotRequest) -> io::Result<SnapshotResp
     let slot = retention::snapshot(state, &key).await;
     let mut retained = slot.lock().await;
     let mut entry = retained.take();
-    let ttl = state.policy.command("snapshot", "read", state.fresh_for);
+    let ttl = crate::policy::ttl(state.policy.command("snapshot", "read", state.fresh_for));
     if !spec.fresh
+        && !crate::policy::current().bypass
         && let Some(cached) = entry.as_ref()
         && !cached.stale
         && (cached.captured >= arrived

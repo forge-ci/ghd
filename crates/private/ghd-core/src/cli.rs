@@ -15,16 +15,45 @@ usage:
   ghd api graphql [--hostname host] -f query=...     like `gh api graphql`
   ghd snapshot -R owner/repo [--fresh|--allow-stale] repository planning snapshot
   ghd stats                                           what the daemon saved
-  ghd daemon                                          run the daemon (auto-started)
+  ghd daemon [start|stop|restart|status]                foreground or lifecycle
+  ghd cache stats|keys|flush                           inspect or invalidate
+  ghd [--no-cache] [--ttl MS] gh <read args...>         per-request cache control
   ghd --version | --help";
 
 /// Run every subcommand except `daemon`, which needs `ghd-daemon`.
 pub fn run(args: &[String]) -> io::Result<()> {
+    let mut policy = crate::request_policy::Policy::default();
+    let mut start = 0;
+    while let Some(arg) = args.get(start) {
+        match arg.as_str() {
+            "--no-cache" if !policy.bypass => policy.bypass = true,
+            "--ttl" if policy.ttl_ms.is_none() => {
+                start += 1;
+                policy.ttl_ms = Some(
+                    args.get(start)
+                        .ok_or_else(|| invalid("--ttl needs milliseconds"))?
+                        .parse()
+                        .map_err(|_| invalid("--ttl needs nonnegative milliseconds"))?,
+                );
+            }
+            _ => break,
+        }
+        start += 1;
+    }
+    crate::request_policy::scope(policy, || run_inner(&args[start..]))
+}
+fn run_inner(args: &[String]) -> io::Result<()> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         [] | ["--help" | "-h" | "help"] => print(USAGE),
         ["--version" | "-V"] => print(&version_banner()),
         ["stats"] => stats(),
+        ["daemon", rest @ ..] if !rest.is_empty() => crate::operations::run(rest),
+        ["cache", rest @ ..] => {
+            let mut words = vec!["cache"];
+            words.extend(rest);
+            crate::operations::run(&words)
+        }
         ["snapshot", rest @ ..] => crate::snapshot::run(
             &rest
                 .iter()

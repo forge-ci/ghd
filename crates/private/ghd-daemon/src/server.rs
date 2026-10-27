@@ -30,8 +30,8 @@ const DEFAULT_FRESH_FOR: Duration = Duration::from_secs(2);
 /// How long a validated entry is served without asking GitHub at all:
 /// `GHD_FRESH_MS` when set (read once at startup), else 2 s.
 fn fresh_for() -> io::Result<Duration> {
-    match std::env::var("GHD_FRESH_MS") {
-        Ok(value) => value
+    match ghd_core::config::value("GHD_FRESH_MS")? {
+        Some(value) => value
             .parse::<u64>()
             .map(Duration::from_millis)
             .map_err(|_| {
@@ -40,11 +40,7 @@ fn fresh_for() -> io::Result<Duration> {
                     "GHD_FRESH_MS must be a nonnegative integer",
                 )
             }),
-        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_FRESH_FOR),
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "GHD_FRESH_MS must be a nonnegative integer",
-        )),
+        None => Ok(DEFAULT_FRESH_FOR),
     }
 }
 const BATCH_WINDOW: Duration = Duration::from_millis(50);
@@ -63,6 +59,7 @@ pub(crate) type GraphqlSlot = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
 
 pub(crate) struct State {
     token: String,
+    pub(crate) lifecycle: Arc<crate::operations::Lifecycle>,
     identity_key: String,
     pub(crate) host: String,
     upstream: Arc<Upstream>,
@@ -94,6 +91,7 @@ pub(crate) fn new_state(
     let disk = crate::persistence::open(identity, journal.clone())?;
     Ok(State {
         disk,
+        lifecycle: Arc::default(),
         policy,
         token,
         identity_key: identity.key().to_string(),
@@ -139,6 +137,7 @@ pub(crate) async fn read_epoch(state: &State) -> io::Result<u64> {
 
 pub fn run() -> io::Result<()> {
     let identity = ghd_core::identity::Identity::resolve(None)?;
+    let _owner = ghd_core::operations::custody(&identity, "owner")?;
     let runtime = RuntimeBuilder::multi_thread().enable_all().build()?;
     runtime.run(async move {
         let server = Server::bind(
@@ -151,12 +150,23 @@ pub fn run() -> io::Result<()> {
         let state = Arc::new(new_state(&identity, token.clone())?);
         endpoint::write_for(&identity, &Endpoint { port, token })?;
         eprintln!("ghd daemon listening on 127.0.0.1:{port}");
-        server
-            .serve(move |request| {
+        let lifecycle = Arc::clone(&state.lifecycle);
+        let published = endpoint::read_for(&identity)?;
+        let result = kernal_api::async_engine::cancellable(
+            &lifecycle.shutdown.token(),
+            server.serve(move |request| {
                 let state = Arc::clone(&state);
                 async move { route(&state, request).await }
-            })
-            .await
+            }),
+        )
+        .await;
+        if endpoint::read_for(&identity).is_ok_and(|ep| ep == published) {
+            std::fs::remove_file(endpoint::directory(&identity)?.join("endpoint"))?;
+        }
+        match result {
+            Ok(result) => result,
+            Err(_) => Ok(()),
+        }
     })
 }
 
@@ -180,29 +190,67 @@ async fn route(state: &State, request: Request) -> Response {
     if !authorized || !same_identity {
         return text(401, "unauthorized");
     }
+    if request.path() == "/v1/admin/stop" && request.method() == "POST" {
+        return crate::operations::stop(state).await;
+    }
+    let _active = match state.lifecycle.enter() {
+        Ok(active) => active,
+        Err(e) => return text(503, &e.to_string()),
+    };
+    let controlled = (request.path().starts_with("/v2/") && request.path() != "/v2/snapshot")
+        || request.path() == "/v3/snapshot";
+    let policy = match request.header("x-ghd-cache-policy") {
+        Some(value) if controlled => {
+            match std::str::from_utf8(value)
+                .ok()
+                .and_then(|v| ghd_core::request_policy::Policy::parse(v).ok())
+            {
+                Some(policy) => policy,
+                None => return text(400, "invalid request cache policy"),
+            }
+        }
+        None if !controlled => ghd_core::request_policy::Policy::default(),
+        _ => return text(400, "controlled protocol required"),
+    };
+    let path = if controlled {
+        if request.path() == "/v3/snapshot" {
+            "/v2/snapshot".into()
+        } else {
+            request.path().replacen("/v2/", "/v1/", 1)
+        }
+    } else {
+        request.path().into()
+    };
     let caller = match request.header("x-ghd-caller") {
         Some(value) if value.len() <= 256 => kernal_api::hash::blake3_bytes(value).to_hex(),
         Some(_) => return text(400, "caller metadata exceeds limit"),
         None => "anonymous".into(),
     };
-    crate::governance::CALLER
-        .scope(caller, async {
-            if request.method() == "POST" {
-                state.control.event(
-                    &crate::governance::caller(),
-                    crate::governance::Event::Request,
-                );
-            }
-            match (request.method(), request.path()) {
-                ("GET", "/v1/health") => text(200, "ok"),
-                ("GET", "/v1/stats") => stats(state).await,
-                ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
-                ("POST", "/v1/graphql") => graphql(state, request.body()).await,
-                ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
-                ("POST", "/v2/snapshot") => crate::snapshots::handle(state, request.body()).await,
-                _ => text(404, "no such route"),
-            }
-        })
+    crate::policy::CURRENT
+        .scope(
+            policy,
+            crate::governance::CALLER.scope(caller, async {
+                if request.method() == "POST" {
+                    state.control.event(
+                        &crate::governance::caller(),
+                        crate::governance::Event::Request,
+                    );
+                }
+                match (request.method(), path.as_str()) {
+                    ("GET", "/v1/health") => text(200, "ok"),
+                    ("GET", "/v1/stats") => stats(state).await,
+                    ("GET", "/v1/admin/keys") => crate::operations::keys(state).await,
+                    ("POST", "/v1/admin/flush") => crate::operations::flush(state).await,
+                    ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
+                    ("POST", "/v1/graphql") => graphql(state, request.body()).await,
+                    ("POST", "/v1/read/gh") => crate::gh_reads::handle(state, request.body()).await,
+                    ("POST", "/v2/snapshot") => {
+                        crate::snapshots::handle(state, request.body()).await
+                    }
+                    _ => text(404, "no such route"),
+                }
+            }),
+        )
         .await
 }
 
@@ -358,11 +406,10 @@ async fn read(
     let covers = |e: &Entry| wanted.iter().all(|f| e.fields.contains_key(f));
     if let Some(e) = entry.as_ref().filter(|e| {
         covers(e)
+            && !crate::policy::current().bypass
             && e.validated.is_some_and(|at| {
                 at.elapsed()
-                    < state
-                        .policy
-                        .command("pr", "view", state.fresh_for)
+                    < crate::policy::ttl(state.policy.command("pr", "view", state.fresh_for))
                         .min(e.ttl)
             })
     }) {
@@ -531,7 +578,8 @@ async fn graphql(state: &State, body: &[u8]) -> Response {
     // One lock per query: concurrent identical calls wait for the first.
     let mut entry = slot.lock().await;
     if let Some((json, at)) = entry.as_ref()
-        && at.elapsed() < state.policy.command("api", "graphql", state.fresh_for)
+        && at.elapsed()
+            < crate::policy::ttl(state.policy.command("api", "graphql", state.fresh_for))
     {
         state.graphql_fresh.fetch_add(1, Ordering::Relaxed);
         return match state.journal.confirm(epoch) {

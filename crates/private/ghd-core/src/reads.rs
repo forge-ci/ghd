@@ -197,10 +197,22 @@ pub fn read(args: &[String]) -> io::Result<GhReadResponse> {
 
 pub fn run_or_passthrough(args: &[&str]) -> io::Result<()> {
     if io::stdout().is_terminal() || uncached_context() {
+        if crate::request_policy::current().active() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cache controls require a headless managed read",
+            ));
+        }
         return compat::run(args);
     }
     let words: Vec<_> = args.iter().map(|s| (*s).to_string()).collect();
     let Some(request) = prepare(&words)? else {
+        if crate::request_policy::current().active() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cache controls require a known safe read",
+            ));
+        }
         return compat::run(args);
     };
     let response = request_reply(&request)?;

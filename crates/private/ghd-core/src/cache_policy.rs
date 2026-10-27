@@ -19,14 +19,9 @@ fn invalid() -> io::Error {
 
 impl Policy {
     pub fn from_environment() -> io::Result<Self> {
-        let read = |name| match std::env::var(name) {
-            Ok(value) => Ok(Some(value)),
-            Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(_) => Err(invalid()),
-        };
         Self::parse(
-            read("GHD_CACHE_TTLS")?.as_deref(),
-            read("GHD_CACHE_SETTLED_MS")?.as_deref(),
+            crate::config::value("GHD_CACHE_TTLS")?.as_deref(),
+            crate::config::value("GHD_CACHE_SETTLED_MS")?.as_deref(),
         )
     }
 

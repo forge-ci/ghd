@@ -310,9 +310,11 @@ async fn fresh(
         allowed
             && entry.validated.is_some_and(|at| {
                 at.elapsed()
-                    < entry
-                        .ttl
-                        .min(state.policy.command("api", "rest", state.fresh_for))
+                    < entry.ttl.min(crate::policy::ttl(state.policy.command(
+                        "api",
+                        "rest",
+                        state.fresh_for,
+                    )))
             })
     }) else {
         return Ok(None);
@@ -340,6 +342,9 @@ async fn fetch(
     entry: Option<&Entry>,
 ) -> io::Result<GhReadResponse> {
     let mut args = rest.fetch_args.clone();
+    if crate::policy::current().bypass {
+        args.extend(["--header".into(), "Cache-Control: no-cache".into()]);
+    }
     if !rest.rate_limit
         && let Some(etag) = entry.and_then(|entry| entry.etag.as_ref())
     {

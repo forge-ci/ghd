@@ -24,7 +24,7 @@ The recurring review issue stays open as a maintenance responsibility.
 | #11 | Bounded durable cache and restart invalidation | Implemented and locally verified; draft PR #18 |
 | #12 | Shared rate governor and cooldown | Implemented and locally verified; draft PR #18 |
 | #13 | Repository snapshots and authority freshness | Implemented and locally verified; draft PR #18 |
-| #14 | Daemon/cache operations and configuration | Pending |
+| #14 | Daemon/cache operations and configuration | Implemented and locally verified; draft PR #18 |
 | #15 | Diagnostics, dashboard and replay | Pending |
 | #16 | Agent plugin and managed gh distribution | Pending |
 | #17 | Standing upstream inspection list | Existing assigned tracker; final reconciliation pending |
@@ -347,4 +347,26 @@ empty repositories, pagination, partial errors, head mismatch, downstream age,
 storage policy, mutation invalidation and Python/CLI sharing. `./ci.py all`
 passes every gate, including wheel/backend smoke and action contracts. Read-only
 clud-review is clean. Contract precheck has zero violations and the same 17
-local-only review items. Hosted snapshot verification awaits this feature push.
+local-only review items. Snapshot head 04d9f86 passed [run40510152848](https://github.com/forge-ci/ghd/actions/runs/40510152848):
+104 cases on each macOS lane and 83 passed/21 existing Unix-transport skips on
+each Windows lane, plus Dylint and CI OK.
+
+## Lifecycle and cache/configuration controls (#14)
+
+Authenticated lifecycle operations serialize starts/restarts under custody
+locks, reject busy stops and wait for ownership release. Cache inspection is
+redacted; flush advances the shared epoch instead of merely dropping a map.
+Scoped request bypass/TTL works through CLI/Python/versioned transport without
+changing another caller's defaults. Typed private JSON configuration preserves
+environment precedence and rejects invalid restarts before stopping. Per-user
+service examples cover foreground supervision without installing a service.
+
+The initial installed two-case RED exposed missing cache operations and absent
+request controls. The first test gate passed all Rust suites and 168 Python
+cases; the subsequently extended focused operational suite passes six cases,
+including active-stop refusal and flush fencing. Review found an old-daemon
+policy-header compatibility gap for snapshots; a retained focused RED reproduces
+it and controlled snapshots now use v3. Final `./ci.py all` passes every gate
+and 170 Python cases, including all seven operations tests. Read-only review is
+clean after the fix; precheck retains zero violations and 17 local review items.
+Native lifecycle verification awaits the feature push.

@@ -413,3 +413,64 @@ if result.exit_code == 0:
 `SnapshotResult` preserves JSON bytes, exit code, source, age, stale/truncation
 flags and the refusal diagnostic. Configuration/transport errors raise
 `OSError`; a freshness refusal returns exit code 3 and `data is None`.
+
+## Daemon and cache operations
+
+`ghd daemon status` inspects the current host/credential identity without
+starting it. It prints `healthy` (exit 0), `missing` or `stale` (exit 3) as
+JSON. `ghd daemon start`, `stop` and `restart` serialize maintenance through
+a private lock. Stop is authenticated, never signals a PID, rejects active
+requests/upstream workers, and waits for lifetime ownership release. Retry a
+busy stop once reads finish. `ghd daemon` still runs in the foreground.
+
+`ghd cache stats` and `ghd cache keys` inspect the running daemon. Keys contain
+only namespace/digest identifiers, counts and accounted retained bytes.
+`ghd cache flush` advances the shared mutation generation, invalidating active
+publishers, all identity partitions and restart bodies, then clears local
+retention. It does not reset governor cooldown or resolve uncertain writes.
+These inspection/flush commands do not auto-start a missing daemon.
+
+Prefix a managed headless read with `--no-cache` to bypass both retained and
+restart bodies without publishing its response into shared retention:
+
+```bash
+ghd --no-cache gh issue view 42 -R owner/repo --json title
+ghd --ttl 0 gh issue view 42 -R owner/repo --json title
+```
+
+`--ttl MS` caps this request's freshness window; zero requires revalidation,
+which may use an existing validator. Neither option changes another caller's
+defaults or extends origin freshness. Explicit bypass uses its own slot and
+requests HTTP revalidation on API fetches. Unsupported/interactive passthrough
+forms reject cache controls. Python `gh_read(args, no_cache=True)` and
+`gh_read(args, ttl_ms=0)` carry the same versioned controls. Use snapshot
+`--fresh` when you need its stricter authority/exit contract.
+
+Set `GHD_CONFIG` to an absolute owner-private JSON file (at most 16 KiB):
+
+```json
+{"GHD_FRESH_MS":2000,"GHD_CACHE_MAX_ENTRIES":4096,"GHD_CACHE_DISK":0,
+ "GHD_CACHE_TTLS":{"issue view":1000}}
+```
+
+Supported keys are `GHD_FRESH_MS`, `GHD_CACHE_MAX_ENTRIES`,
+`GHD_CACHE_MAX_BYTES`, `GHD_RATE_RESERVE`, `GHD_CACHE_SETTLED_MS`,
+`GHD_CACHE_DISK` (integer 0/1), and `GHD_CACHE_TTLS` (command/ms object).
+Other numeric settings require nonnegative integers. Unknown keys, invalid
+types and unreadable/non-private files fail explicitly. Environment settings
+override file settings; built-in defaults apply last. Per-command TTL policy
+overrides the daemon default; per-request TTL and origin policy cap that
+result. Restart validates configuration before stopping a healthy daemon.
+
+For a supervised service, run the absolute installed `ghd daemon` executable
+as the credential's user, with a private state/config directory and the same
+`GH_HOST`/credential environment as clients. Keep credentials out of service
+command arguments. On Linux a user systemd unit can use `Type=simple`,
+`ExecStart=/absolute/path/ghd daemon`, `ExecStop=/absolute/path/ghd daemon stop`,
+and `Restart=on-failure`. macOS LaunchAgents and Windows user task/service
+supervisors use the same foreground command and authenticated stop command;
+configure their user environment explicitly. No system service is installed.
+A stale endpoint can be replaced by `daemon start` after ownership is free.
+Preserve private state when investigating interrupted publication/uncertain
+writes; flush/restart deliberately cannot erase that evidence or claim an
+unknown upstream mutation succeeded.

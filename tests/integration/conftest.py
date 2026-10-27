@@ -29,7 +29,7 @@ import pytest
 from ghd.platforms import cli_binary_name, is_windows
 
 FAKE_GH = r"""
-import json, os, subprocess, sys, urllib.request
+import json, os, subprocess, sys, time, urllib.request
 from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 args = sys.argv[1:]
@@ -158,6 +158,14 @@ if os.environ.get("GH_DEBUG") or os.environ.get("DEBUG"):
     print("fixture API diagnostics", file=sys.stderr)
 with open(TRACE_PATH, "a", encoding="utf-8") as trace:
     trace.write(json.dumps(args) + "\n")
+hold = Path(TRACE_PATH).with_name("operation-hold")
+if hold.exists():
+    Path(TRACE_PATH).with_name("operation-started").touch()
+    deadline = time.monotonic() + 5
+    while hold.read_text(encoding="utf-8") != "released":
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.01)
 kind, action = args[:2]
 if action == "edit":
     raise SystemExit(0)
@@ -291,7 +299,7 @@ def _resource_cli(
             direct: bool = False,
             native: bool = False,
             python_code: str | None = None,
-            context: dict[str, str] | None = None,
+            context: dict[str, str | None] | None = None,
             daemon_action: Literal["restart", "stop"] | None = None,
         ) -> subprocess.CompletedProcess[str]:
             nonlocal daemon
@@ -314,7 +322,11 @@ def _resource_cli(
                 command = [sys.executable, "-c", python_code]
             return subprocess.run(
                 command,
-                env=env | (context or {}),
+                env={
+                    key: value
+                    for key, value in (env | (context or {})).items()
+                    if value is not None
+                },
                 cwd=tmp_path,
                 capture_output=True,
                 text=True,

@@ -411,3 +411,40 @@ an expired body plus upstream failure returns code 3 with no JSON. Opt-in can
 return the old body with increasing age and a bounded reason, but cannot cross
 a mutation epoch. Fresh and stale-planning options are mutually exclusive.
 Transport/configuration errors remain distinct from service freshness refusal.
+
+## Operational ownership and request policy
+
+Core operations reuse the private-state directory lock helper for separate
+maintenance and lifetime-owner directories. A foreground daemon acquires the
+owner lock before binding/publishing an endpoint; detached autostart retains
+the existing start lock and health check. Maintenance serializes explicit
+starts/restarts. Stop uses the current authenticated endpoint and never a PID.
+The daemon closes admission atomically with checking active handler count and
+upstream/read permits. Busy stop returns 409. Accepted stop schedules runtime
+cancellation after a short response grace, removes only its own endpoint and
+releases ownership on exit. The client waits boundedly for that release.
+Dropped handlers are counted through a guard; detached upstream workers retain
+their existing permits until reaped.
+
+Flush advances the global journal through a completed intent, then clears
+local retained slots. Old requests cannot publish/return against that epoch;
+other identities and durable bodies also observe the new generation. The
+operation does not remove outstanding intents or reset admission cooldown.
+Inspection emits namespace/digest keys, never raw query/credential/body data.
+
+CLI/PyO3 request policy uses a scoped thread-local value while constructing
+the synchronous transport call. Controlled reads use v2 route names (v3 for the already-v2 snapshot) and a
+strict versioned policy header, so old daemons fail instead of ignoring flags.
+The daemon holds policy in an async task-local separate from cache keys and
+identity. Bypass creates an unindexed slot and suppresses durable restoration
+and saving; ordinary callers retain their original cache. TTL is a final cap
+after command/settled policy and cannot extend origin policy. HTTP API bypass
+fetches add no-cache. Snapshot authority remains a separate explicit contract.
+
+Configuration reads use bounded native owner-private file validation and the
+existing JSON parser. Only known numeric settings and the typed command-TTL
+object are allowed; credentials and paths are not configurable there. The
+environment wins over a valid file, then defaults apply. Explicit lifecycle
+changes validate configuration before stopping, and a new daemon reads its
+configuration before endpoint publication. No environment mutation or second
+platform selector was introduced.

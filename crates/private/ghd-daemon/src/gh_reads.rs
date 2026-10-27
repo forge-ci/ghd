@@ -120,10 +120,12 @@ async fn run(state: &State, request: &GhReadRequest) -> io::Result<GhReadRespons
     if let Some(cached) = entry.as_ref()
         && cached.validated.is_some_and(|at| {
             at.elapsed()
-                < state
-                    .policy
-                    .resource(&plan, &cached.response.stdout, state.fresh_for)
-                    .min(cached.ttl)
+                < crate::policy::ttl(state.policy.resource(
+                    &plan,
+                    &cached.response.stdout,
+                    state.fresh_for,
+                ))
+                .min(cached.ttl)
         })
         && (!plan.resource || plan.project(&cached.response.stdout).is_ok())
     {
@@ -252,6 +254,9 @@ async fn fetch(
             "GET".into(),
             "--include".into(),
         ];
+        if crate::policy::current().bypass {
+            api_args.extend(["--header".into(), "Cache-Control: no-cache".into()]);
+        }
         if let Some(etag) = etag {
             api_args.extend(["--header".into(), format!("If-None-Match: {etag}")]);
         }

@@ -18,8 +18,8 @@
 
 pub use ghd_core::{
     cache_policy, cli, client, coherence, compat, durable, endpoint, fields, governor,
-    governor_ledger, identity, operation, proto, reads, resource, rest, retention, snapshot,
-    version_banner,
+    governor_ledger, identity, operation, operations, proto, reads, request_policy, resource, rest,
+    retention, snapshot, version_banner,
 };
 
 #[cfg(feature = "daemon")]

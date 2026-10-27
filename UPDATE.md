@@ -172,3 +172,14 @@ references removed concepts is worse than no procedure.
   and capture timestamp in schema-v1 output. Snapshot bodies remain memory-only.
 - Verify the #12 fixture correction in hosted run 40506918999: the complete
   selected integration directory passes on Windows/macOS x64/ARM64, with CI OK.
+
+## ghx parity: lifecycle, cache controls and configuration (#14)
+
+- Add authenticated daemon start/stop/restart/status with lifetime ownership,
+  serialized maintenance, active-work refusal and no PID signaling.
+- Add redacted cache keys/stats and generation-fenced flush, including active
+  publishers and persisted bodies. Governor and uncertain writes stay intact.
+- Carry per-request bypass/TTL caps through CLI, Python and a versioned daemon
+  route. Bypass neither reads nor publishes shared/durable bodies.
+- Add bounded, typed owner-private JSON configuration with environment
+  precedence, explicit invalid-input failures and per-user service guidance.
