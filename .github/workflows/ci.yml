@@ -954,7 +954,7 @@ jobs:
       - name: Native CLI smoke inside Alpine (musl libc) + write smoke-results/${{ matrix.lane.id }}.json
         env:
           MUSL_SMOKE_PLATFORM_ID: ${{ matrix.lane.id }}
-        run: docker run --rm -v "$PWD:/work" -w /work python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f python3 ci/musl_smoke.py --wheel-dir dist --platform-id "$MUSL_SMOKE_PLATFORM_ID" --venv .venv-musl-smoke --cli-name ghd-cli --out smoke-results/${{ matrix.lane.id }}.json
+        run: docker run --rm -v "$PWD:/work" -w /work python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f python3 ci/musl_smoke.py --wheel-dir dist --platform-id "$MUSL_SMOKE_PLATFORM_ID" --venv .venv-musl-smoke --cli-name ghd --out smoke-results/${{ matrix.lane.id }}.json
 
       - name: Upload release smoke result
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
