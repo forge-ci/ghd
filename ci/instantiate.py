@@ -79,8 +79,8 @@ EXCLUDE_DIR_NAMES = frozenset(
 # consumed whole before "ghd-py" could match a substring of it.
 # {kebab}/{snake} are filled in by `_replacements()`.
 _COMPOUND_ORDER = [
-    "ghd",
-    "ghd",
+    "ghd-cross-pure",
+    "ghd_cross_pure",
     "ghd-platform",
     "ghd_platform",
     "ghd-core",
@@ -88,7 +88,9 @@ _COMPOUND_ORDER = [
     "ghd-daemon",
     "ghd_daemon",
     "ghd-cli",
+    "ghd_cli",
     "ghd-py",
+    "ghd_py",
 ]
 
 # Files where a BARE "template" token (not part of any compound above)
@@ -100,7 +102,7 @@ _COMPOUND_ORDER = [
 # "crates/template"` / `"template:test:api"`. No other tracked file has
 # a bare structural "template" outside these compounds and Rust `use`/
 # path expressions (handled separately, see `_RUST_BARE_TEMPLATE_FILES`).
-_BARE_TEMPLATE_GLOBS = ("Cargo.toml", "Cargo.lock", "ci.toml")
+_BARE_TEMPLATE_GLOBS = ("Cargo.toml", "Cargo.lock", "ci.toml", "pyproject.toml")
 
 # Every consumer of the amalgam crate (its own doctest, its integration
 # test, the CLI binary, the PyO3 extension) reaches it by bare Rust path
@@ -128,15 +130,28 @@ def _replacements(name: str) -> list[tuple[str, str]]:
     snake = _snake(name)
     out: list[tuple[str, str]] = []
     for token in _COMPOUND_ORDER:
-        if token == "ghd":
-            out.append((token, kebab))
-        elif token == "ghd":
-            out.append((token, snake))
-        elif "_" in token:
-            out.append((token, token.replace("template", snake, 1)))
-        else:
-            out.append((token, token.replace("template", kebab, 1)))
+        sep = snake if "_" in token else kebab
+        out.append((token, token.replace("ghd", sep, 1)))
     return out
+
+
+# Bare `ghd` (no compound suffix) is ambiguous: the kebab form in manifests
+# (`name = "ghd"`, `crates/ghd`), the snake form for the Python package and
+# the Rust crate identifier (`src/ghd/`, `from ghd`, `ghd::`). Prose, URLs
+# (`forge-ci/ghd`) and the `ghd.rs` file name are deliberately left alone.
+_SNAKE_CONTEXTS = (
+    re.compile(r"(?<=src/)ghd\b(?!\.rs)"),
+    re.compile(r"(?<=\bfrom )ghd\b"),
+    re.compile(r"(?<=\bimport )ghd\b"),
+    re.compile(r"\bghd(?=\.(?:bindings|platforms|_native|__version__)\b)"),
+    re.compile(r"\bghd(?=::)"),
+)
+_KEBAB_PATH_CONTEXTS = (
+    re.compile(r"(?<=crates/)ghd\b(?!-)"),
+    re.compile(r"(?<=\.\./)ghd\b(?!-)"),
+)
+# In manifests only: a bare token that is not part of a URL/path/compound.
+_BARE_TOML = re.compile(r"(?<![/\w.-])ghd\b(?![-.\w/])")
 
 
 def _should_skip_dir(name: str) -> bool:
@@ -199,7 +214,7 @@ def _is_text_file(path: Path) -> bool:
 
 
 def _apply_compound_replacements(
-    out_dir: Path, replacements: list[tuple[str, str]]
+    out_dir: Path, replacements: list[tuple[str, str]], kebab: str, snake: str
 ) -> int:
     changed = 0
     for path in sorted(out_dir.rglob("*")):
@@ -209,6 +224,10 @@ def _apply_compound_replacements(
         new_text = text
         for old, new in replacements:
             new_text = new_text.replace(old, new)
+        for pattern in _SNAKE_CONTEXTS:
+            new_text = pattern.sub(snake, new_text)
+        for pattern in _KEBAB_PATH_CONTEXTS:
+            new_text = pattern.sub(kebab, new_text)
         if new_text != text:
             path.write_text(new_text, encoding="utf-8")
             changed += 1
@@ -216,7 +235,7 @@ def _apply_compound_replacements(
 
 
 def _apply_bare_template_toml(out_dir: Path, kebab: str) -> int:
-    pattern = re.compile(r"\btemplate\b")
+    pattern = _BARE_TOML
     changed = 0
     for glob in _BARE_TEMPLATE_GLOBS:
         for path in sorted(out_dir.rglob(glob)):
@@ -235,7 +254,7 @@ def _apply_bare_template_rust(out_dir: Path, snake: str) -> int:
     # "the template" in a doc comment (e.g. dylints/platform_boundary's
     # own commentary) -- only actual Rust path expressions, which is
     # exactly the crate's usage in doctests/integration tests/consumers.
-    pattern = re.compile(r"\btemplate::")
+    pattern = re.compile(r"\bghd::")
     changed = 0
     crates_dir = out_dir / "crates"
     if not crates_dir.is_dir():
@@ -289,14 +308,18 @@ def _rename_paths(out_dir: Path, kebab: str, snake: str) -> None:
         out_dir / "crates" / "private" / "ghd-daemon": out_dir
         / "crates"
         / "private"
-        / f"{kebab}-json",
+        / f"{kebab}-daemon",
         out_dir / "crates" / "private" / "ghd-core": out_dir
         / "crates"
         / "private"
         / f"{kebab}-core",
+        out_dir / "crates" / "private" / "ghd-cross-pure": out_dir
+        / "crates"
+        / "private"
+        / f"{kebab}-cross-pure",
         out_dir / "crates" / "ghd-py": out_dir / "crates" / f"{kebab}-py",
         out_dir / "crates" / "ghd-cli": out_dir / "crates" / f"{kebab}-cli",
-        out_dir / "crates" / "template": out_dir / "crates" / kebab,
+        out_dir / "crates" / "ghd": out_dir / "crates" / kebab,
         out_dir / "src" / "ghd": out_dir / "src" / snake,
     }
     for old, new in dir_renames.items():
@@ -329,7 +352,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     replacements = _replacements(name)
-    n1 = _apply_compound_replacements(out_dir, replacements)
+    n1 = _apply_compound_replacements(out_dir, replacements, kebab, snake)
     n2 = _apply_bare_template_toml(out_dir, kebab)
     n3 = _apply_bare_template_rust(out_dir, snake)
     _rename_paths(out_dir, kebab, snake)
