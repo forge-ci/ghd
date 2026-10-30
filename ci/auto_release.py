@@ -212,16 +212,16 @@ def _tag_exists(tag: str) -> bool:
 def _fetch_run(run_id: str) -> tuple[dict, list[dict]]:
     repo = os.environ["GITHUB_REPOSITORY"]
     run = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}"))
-    jobs = json.loads(
+    # gh rejects `--slurp` together with `--jq`: slurp the pages, flatten here.
+    pages = json.loads(
         _gh(
             "api",
             "--paginate",
             f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100",
-            "--jq",
-            ".jobs[]",
             "--slurp",
         )
     )
+    jobs = [job for page in pages for job in page["jobs"]]
     return run, jobs
 
 
