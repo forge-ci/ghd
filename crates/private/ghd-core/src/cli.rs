@@ -4,7 +4,7 @@
 use crate::proto::{PrViewRequest, PrViewResponse};
 use crate::{client, version_banner};
 use prost::Message;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 pub const USAGE: &str = "\
 ghd: a cached, batched, budget-aware gateway for gh reads
@@ -87,11 +87,13 @@ pub fn parse_pr_view(
             .filter(|f| !f.is_empty())
             .map(String::from)
             .collect(),
+        compact: false,
     })
 }
 
 fn pr_view(args: &[&str]) -> io::Result<()> {
-    let request = parse_pr_view(args, repo_from_git)?;
+    let mut request = parse_pr_view(args, repo_from_git)?;
+    request.compact = !io::stdout().is_terminal();
     let reply = pr_view_request(&request)?;
     if std::env::var_os("GHD_DEBUG").is_some() {
         // One write per line, so concurrent ghd processes sharing a pipe
@@ -148,6 +150,8 @@ mod tests {
             ("o", "r", 12)
         );
         assert_eq!(req.fields, ["state", "title"]);
+        // The CLI decides `compact` from its stdout; parsing never sets it.
+        assert!(!req.compact);
     }
 
     #[test]

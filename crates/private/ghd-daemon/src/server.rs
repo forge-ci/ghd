@@ -199,7 +199,12 @@ async fn pr_view(state: &State, body: &[u8]) -> Response {
                 .iter()
                 .filter_map(|f| fields.get(f).map(|v| (f.clone(), v.clone())))
                 .collect();
-            match json::encode(&Value::Object(doc), Layout::Pretty) {
+            let layout = if req.compact {
+                Layout::Compact
+            } else {
+                Layout::Pretty
+            };
+            match json::encode(&Value::Object(doc), layout) {
                 Ok(json) => reply(
                     200,
                     &PrViewResponse {
