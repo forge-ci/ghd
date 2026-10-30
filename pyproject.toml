@@ -10,7 +10,7 @@ build-backend = "soldr"
 
 [project]
 name = "ghd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Skeleton for a Python package backed by a Rust CLI and PyO3 bindings"
 readme = "README.md"
 requires-python = ">=3.10"
