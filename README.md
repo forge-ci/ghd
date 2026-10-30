@@ -86,12 +86,25 @@ fresh window, which is exactly what an agent's re-check loop hits.
 ## Command reference
 
 ```text
+ghd gh <gh args...>                                 a drop-in gh: native when ghd
+                                                    understands it, else the real gh
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
 ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
 ghd stats                                           what the daemon saved
 ghd daemon                                          run the daemon (auto-started)
 ghd --version | --help
 ```
+
+**`ghd gh`** (ghd#8)
+- Takes any `gh` command line. Shapes ghd serves natively (`pr view N
+  [-R X] --json F`, `api graphql -f/-F`) go through the daemon. Everything
+  else, including `--jq`/`--template` and a failed native `pr view`, runs
+  the real gh with your stdin, stdout, stderr and terminal, and returns its
+  exit code. The output and errors are gh's own.
+- The real gh is `$GHD_REAL_GH` when set (a launcher with a `gh` shim on
+  PATH sets it), else the first `gh` on PATH that is not ghd. A relay that
+  leads back into ghd fails with one line instead of looping.
+- Relayed calls are not cached yet; caching captured reads is the next step.
 
 **`ghd pr view`**
 - Same output as `gh pr view --json`. Without `-R`, the repository comes

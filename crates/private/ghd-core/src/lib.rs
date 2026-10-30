@@ -20,6 +20,7 @@ pub mod endpoint;
 pub mod fields;
 pub mod graphql;
 pub mod proto;
+pub mod relay;
 
 /// `ghd <version> (<os>)`, printed by `ghd --version`.
 pub fn version_banner() -> String {
