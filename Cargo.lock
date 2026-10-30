@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "ghd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ghd-core",
  "ghd-daemon",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "ghd-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ghd",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "ghd-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ghd-platform",
@@ -309,14 +309,14 @@ dependencies = [
 
 [[package]]
 name = "ghd-cross-pure"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
 name = "ghd-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ghd-core",
  "kernal-api",
@@ -325,11 +325,11 @@ dependencies = [
 
 [[package]]
 name = "ghd-platform"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "ghd-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ghd",
  "pyo3",
