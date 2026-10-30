@@ -5,11 +5,14 @@ use crate::proto::{PrViewRequest, PrViewResponse};
 use crate::{client, version_banner};
 use prost::Message;
 use std::io::{self, IsTerminal, Write};
+use std::process::ExitCode;
 
 pub const USAGE: &str = "\
 ghd: a cached, batched, budget-aware gateway for gh reads
 
 usage:
+  ghd gh <gh args...>                                 gh-compatible: native when ghd
+                                                      understands it, else the real gh
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
   ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
   ghd stats                                           what the daemon saved
@@ -17,15 +20,42 @@ usage:
   ghd --version | --help";
 
 /// Run every subcommand except `daemon`, which needs `ghd-daemon`.
-pub fn run(args: &[String]) -> io::Result<()> {
+pub fn run(args: &[String]) -> io::Result<ExitCode> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let done = |result: io::Result<()>| result.map(|()| ExitCode::SUCCESS);
     match args.as_slice() {
-        [] | ["--help" | "-h" | "help"] => print(USAGE),
-        ["--version" | "-V"] => print(&version_banner()),
-        ["stats"] => stats(),
-        ["pr", "view", rest @ ..] => pr_view(rest),
-        ["api", "graphql", rest @ ..] => crate::graphql::run(rest),
+        [] | ["--help" | "-h" | "help"] => done(print(USAGE)),
+        ["--version" | "-V"] => done(print(&version_banner())),
+        ["stats"] => done(stats()),
+        ["gh", rest @ ..] => gh_compatible(rest),
+        ["pr", "view", rest @ ..] => done(pr_view(rest)),
+        ["api", "graphql", rest @ ..] => done(crate::graphql::run(rest)),
         _ => Err(invalid(USAGE)),
+    }
+}
+
+/// `ghd gh ...`: serve natively when ghd parses the arguments exactly,
+/// else relay to the real gh (ghd#8). A shape ghd does not parse (`--jq`,
+/// `--template`, a branch selector, any other command) is never an error.
+fn gh_compatible(args: &[&str]) -> io::Result<ExitCode> {
+    let native = match args {
+        ["pr", "view", rest @ ..] => parse_pr_view(rest, repo_from_git).is_ok(),
+        ["api", "graphql", rest @ ..] => {
+            crate::graphql::parse(rest, |path| std::fs::read_to_string(path)).is_ok()
+        }
+        _ => false,
+    };
+    match args {
+        // A failed native `pr view` (not found, auth, daemon down) has
+        // printed nothing, so it is relayed: rerunning a read is safe, and
+        // gh's own error text and exit code keep the substitute exact.
+        ["pr", "view", rest @ ..] if native && pr_view(rest).is_ok() => Ok(ExitCode::SUCCESS),
+        // `api graphql` prints the body before reporting its errors, so it
+        // is not rerun.
+        ["api", "graphql", rest @ ..] if native => {
+            crate::graphql::run(rest).map(|()| ExitCode::SUCCESS)
+        }
+        _ => crate::relay::run(args),
     }
 }
 
@@ -139,6 +169,17 @@ mod tests {
 
     fn no_git() -> io::Result<String> {
         Err(io::Error::other("unused"))
+    }
+
+    #[test]
+    fn gh_flags_ghd_does_not_implement_are_relayed_not_native() {
+        // `ghd gh` serves natively only what parses; these go to real gh.
+        for extra in [["--jq", ".state"], ["--template", "{{.state}}"]] {
+            let mut args = vec!["12", "-R", "o/r", "--json", "state"];
+            args.extend(extra);
+            assert!(parse_pr_view(&args, no_git).is_err(), "{extra:?}");
+        }
+        assert!(parse_pr_view(&["12", "-R", "o/r"], no_git).is_err());
     }
 
     #[test]
