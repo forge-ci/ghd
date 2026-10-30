@@ -74,7 +74,7 @@ binaries = [
 # ── Lint lanes ───────────────────────────────────────────────────────────────
 [lint.dylint]
 targets = "all-platforms"           # one check-only pass per declared target, all on Linux
-# shape: D6 measured round 3B, nightly-2026-05-28 driver now catalogued
+# shape: D6 measured round 3B, nightly-2026-08-15 driver now catalogued
 # (round 2's blocker resolved). Same-commit, both cold (no cache: PR
 # flow never writes), host + 5 cross targets, 6 declared platforms:
 #   sequential:    6 passes, 88.8s check time (+ ~15s prepare), job 148s

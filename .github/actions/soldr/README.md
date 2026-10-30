@@ -42,8 +42,8 @@ action's own `inputs:`, so a caller cannot override them even by accident.
 
 Before `v0.9.81`, setup-soldr compared Dylint's success marker and looked
 up Dylint output paths using the short, requested toolchain channel (e.g.
-`nightly-2026-05-28`), while soldr's own Dylint plan is host-qualified
-(e.g. `nightly-2026-05-28-x86_64-unknown-linux-gnu`). The exact-string
+`nightly-2026-08-15`), while soldr's own Dylint plan is host-qualified
+(e.g. `nightly-2026-08-15-x86_64-unknown-linux-gnu`). The exact-string
 mismatch meant `dylint-cache` and `dylint-output-cache` were never saved
 on a successful Dylint run — every run recomputed the lint from scratch.
 
@@ -124,7 +124,7 @@ ingestion; its cache entries were deleted too), pinned to setup-soldr PR
 | Input | Forwards to | Used by |
 |---|---|---|
 | `dylint` | `dylint` | the `dylint` job: resolves the requested nightly, runs `soldr dylint prepare`, exports `SOLDR_DYLINT_SUCCESS_MARKER` / `SOLDR_DYLINT_CONFIGURED_*` |
-| `dylint-toolchain` | `dylint-toolchain` | the `dylint` job: pinned to `nightly-2026-05-28` -- this workspace's auto-mapped nightly (`nightly-2026-02-28`) has no catalogued driver asset |
+| `dylint-toolchain` | `dylint-toolchain` | the `dylint` job: pinned to `nightly-2026-08-15` -- this workspace's auto-mapped nightly (`nightly-2026-02-28`) has no catalogued driver asset |
 | `prebuild-deps` | `prebuild-deps` | the `dylint` job sets `none`: `soldr cook`'s stable-toolchain deps can't warm a nightly Dylint compile |
 | `cross-target` | `cross-targets` | a cross-target Dylint or cross-build pass; exactly one triple per call |
 | `ci-tests` | `ci-tests` | the `fast` job's `soldr ci-test` step: declares the linked-test-product cache exclusion |
