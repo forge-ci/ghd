@@ -14,6 +14,10 @@ pub struct PrViewRequest {
     /// `gh pr view --json` field names.
     #[prost(string, repeated, tag = "4")]
     pub fields: Vec<String>,
+    /// Compact one-line JSON, as `gh` prints when stdout is not a terminal.
+    /// `false` keeps the indented layout `gh` uses on a terminal.
+    #[prost(bool, tag = "5")]
+    pub compact: bool,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]

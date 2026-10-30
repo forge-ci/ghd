@@ -22,6 +22,7 @@ fn pr_view(owner: String, repo: String, number: u64, fields: Vec<String>) -> PyR
         repo,
         number,
         fields,
+        compact: false,
     };
     let reply =
         ghd::cli::pr_view_request(&request).map_err(|e| PyOSError::new_err(e.to_string()))?;
