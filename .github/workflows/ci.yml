@@ -466,7 +466,7 @@ jobs:
           preserve-source-mtimes: "false"
 
       - name: Install aarch64 Linux cross gcc (ring's C build)
-        run: sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+        run: python3 ci/install_cross_gcc.py
 
       - name: Dylint -- host + every declared cross target
         # Linux TLS is rustls (ghd-daemon's manifest), whose `ring` build
