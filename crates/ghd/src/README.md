@@ -26,7 +26,7 @@ pub use ghd_daemon::run as run_daemon;
     `cli::pr_view_request`, `cli::parse_pr_view`, `cli::USAGE`).
   - `client` — `client::call(method, path, body)`: one std-only
     loopback HTTP/1.1 call that starts the daemon if none answers.
-  - `endpoint` — the `<state dir>/endpoint` file (`port token`).
+  - `endpoint` — the `<state dir>/endpoint-p<PROTOCOL>` file (`port token`); keyed by wire protocol so a client never uses an incompatible daemon (#31).
   - `fields` — `PR_FIELDS` and `valid_name`, the GraphQL allowlist.
   - `proto` — `PrViewRequest` / `PrViewResponse`.
   - `version_banner()` — `ghd <version> (<os>)`.

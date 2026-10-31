@@ -211,5 +211,6 @@ Findings to carry into the real build:
 2. kernal-api's `http::Client` forces HTTP/1 with `pool_max_idle_per_host(0)`, so every upstream call pays a fresh TLS handshake. Ask kernal-api for a keep-alive/HTTP2 option.
 3. Output whitespace must follow `gh`'s TTY rule: compact when piped, indented on a TTY.
 4. Daemon start is serialized with a `start.lock` flock. Without it, ten cold clients started ten daemons.
+5. The endpoint file, start lock and log are keyed by the wire `PROTOCOL` (`endpoint-p2`), and `/v1/health` answers `ok protocol=<n>`, which the client checks exactly. An older or newer daemon is never used and never killed; each protocol runs its own daemon (#31).
 5. Renamed repos answer 301 (`zackees/clud` → `talos-hq/clud`), so redirects are on, max 3.
 6. The daemon has no idle exit yet, and the cache is in memory only (sqlite comes next).

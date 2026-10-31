@@ -1,6 +1,11 @@
 //! One std-only HTTP/1.1 call to the loopback daemon, so a warm `ghd`
 //! invocation builds no runtime and no TLS stack. When nothing answers, the
 //! client starts the daemon (once, under a lock) and retries.
+//!
+//! Version skew (#31): the endpoint file is keyed by protocol, and the start
+//! path's `/v1/health` handshake requires the exact
+//! protocol, so an incompatible daemon is never used — and never killed: the
+//! client starts its own on the protocol's own endpoint instead (#31).
 
 use crate::endpoint::{self, Endpoint};
 use crate::platform;
@@ -16,6 +21,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// `(status, body)` from the daemon, starting it if it is not running.
 pub fn call(method: &str, path: &str, body: &[u8]) -> io::Result<(u16, Vec<u8>)> {
     match endpoint::read().and_then(|ep| send(&ep, method, path, body)) {
+        // 401: the port now belongs to another daemon. Start ours; the start
+        // path uses only a daemon that passes the protocol handshake.
         Ok(reply) if reply.0 != 401 => Ok(reply),
         _ => send(&start_daemon()?, method, path, body),
     }
@@ -78,9 +85,15 @@ fn dechunk(mut data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// The handshake: the daemon answers health with this build's exact protocol.
+fn compatible(ep: &Endpoint) -> bool {
+    matches!(send(ep, "GET", "/v1/health", &[]),
+        Ok((200, body)) if body == endpoint::health_body().as_bytes())
+}
+
 fn healthy() -> Option<Endpoint> {
     let ep = endpoint::read().ok()?;
-    matches!(send(&ep, "GET", "/v1/health", &[]), Ok((200, _))).then_some(ep)
+    compatible(&ep).then_some(ep)
 }
 
 /// The `ghd` executable that runs the daemon: `$GHD_EXE`, this process when
@@ -113,12 +126,13 @@ fn daemon_exe() -> io::Result<PathBuf> {
 fn start_daemon() -> io::Result<Endpoint> {
     let dir = endpoint::state_dir()?;
     platform::fs::create_private_dir(&dir)?;
-    let lock = std::fs::File::create(dir.join("start.lock"))?;
+    let lock = std::fs::File::create(dir.join(endpoint::versioned("start.lock")))?;
     lock.lock()?;
     if let Some(ep) = healthy() {
         return Ok(ep);
     }
-    let log = std::fs::File::create(dir.join("daemon.log"))?;
+    let log_path = dir.join(endpoint::versioned("daemon.log"));
+    let log = std::fs::File::create(&log_path)?;
     platform::process::spawn_detached(
         Command::new(daemon_exe()?)
             .arg("daemon")
@@ -135,7 +149,7 @@ fn start_daemon() -> io::Result<Endpoint> {
     }
     Err(io::Error::other(format!(
         "ghd daemon did not come up within {START_DEADLINE:?}; see {}",
-        dir.join("daemon.log").display()
+        log_path.display()
     )))
 }
 
@@ -155,6 +169,43 @@ mod tests {
         let raw = b"HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
         let (status, body) = parse_response(raw).expect("test fixture");
         assert_eq!((status, body.as_slice()), (404, b"abcde".as_slice()));
+    }
+
+    /// A one-shot loopback server answering `GET /v1/health` with `body`.
+    fn fake_daemon(body: &'static str) -> Endpoint {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        Endpoint {
+            port,
+            token: "t".into(),
+        }
+    }
+
+    #[test]
+    fn a_stale_daemon_without_a_protocol_is_not_compatible() {
+        assert!(!compatible(&fake_daemon("ok")));
+    }
+
+    #[test]
+    fn a_daemon_on_another_protocol_is_not_compatible() {
+        assert!(!compatible(&fake_daemon("ok protocol=1")));
+    }
+
+    #[test]
+    fn a_daemon_on_this_protocol_is_compatible() {
+        let body: &'static str = Box::leak(endpoint::health_body().into_boxed_str());
+        assert!(compatible(&fake_daemon(body)));
     }
 
     #[test]
