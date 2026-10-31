@@ -135,7 +135,7 @@ async fn route(state: &State, request: Request) -> Response {
         return text(401, "unauthorized");
     }
     match (request.method(), request.path()) {
-        ("GET", "/v1/health") => text(200, "ok"),
+        ("GET", "/v1/health") => text(200, &endpoint::health_body()),
         ("GET", "/v1/stats") => stats(state),
         ("POST", "/v1/pr/view") => pr_view(state, request.body()).await,
         ("POST", "/v1/graphql") => graphql(state, request.body()).await,
