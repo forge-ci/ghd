@@ -447,10 +447,10 @@ jobs:
         with:
           dylint: "true"
           # This workspace's auto-mapped nightly (from its stable 1.95.0
-          # channel) has no catalogued Dylint driver asset; nightly-2026-05-28
+          # channel) has no catalogued Dylint driver asset; nightly-2026-08-15
           # does (zackees/clud's working _dylint.yml pattern). Must equal
           # dylints/platform_boundary/rust-toolchain.toml's channel exactly.
-          dylint-toolchain: "nightly-2026-05-28"
+          dylint-toolchain: "nightly-2026-08-15"
           # ci.yml#9 (setup-soldr v0.9.83+): setup-soldr itself prepares
           # rust-std for each cross target and keys the Dylint
           # foundation/output cache on the full target set, so
@@ -466,7 +466,7 @@ jobs:
           preserve-source-mtimes: "false"
 
       - name: Install aarch64 Linux cross gcc (ring's C build)
-        run: sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+        run: python3 ci/install_cross_gcc.py
 
       - name: Dylint -- host + every declared cross target
         # Linux TLS is rustls (ghd-daemon's manifest), whose `ring` build

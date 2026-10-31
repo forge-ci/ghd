@@ -1,16 +1,10 @@
 error: host-platform selection outside the ghd-platform boundary: host selection macro `cfg_select!`; the only allowed selection site is crates/private/ghd-platform/src/lib.rs, and native platform paths are additionally allowed under crates/private/ghd-platform/src/platforms/**
-  --> $DIR/disallowed_cfg_select.rs:5:1
+  --> $DIR/disallowed_cfg_select.rs:3:1
    |
-LL | / cfg_select! {
-LL | |     unix => {
-LL | |         fn f() -> u8 { 1 }
-LL | |     },
-LL | |     windows => {
-LL | |         fn f() -> u8 { 2 }
-LL | |     },
-LL | | }
-   | |_^
+LL | use std::cfg_select;
+   | ^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(platform_boundary)]` on by default
 
 error: aborting due to 1 previous error
+

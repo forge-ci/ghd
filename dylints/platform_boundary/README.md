@@ -55,7 +55,7 @@ green again.
 
 Captured on zackees/ci.yml#6 round 2B (PR #17), once the lane's driver
 acquisition was fixed to request a catalogued nightly
-(`nightly-2026-05-28` — see this crate's `rust-toolchain.toml`):
+(`nightly-2026-08-15` — see this crate's `rust-toolchain.toml`):
 
 - **RED** — run
   [36493899806](https://github.com/forge-ci/ghd/actions/runs/36493899806),

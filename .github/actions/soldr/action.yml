@@ -25,7 +25,7 @@ inputs:
       setup-soldr auto-map this workspace's stable channel to a catalogued
       nightly; set explicitly when that auto-mapped nightly has no
       catalogued Dylint driver asset (confirmed for this workspace: the
-      auto-mapped nightly-2026-02-28 has none, but nightly-2026-05-28
+      auto-mapped nightly-2026-02-28 has none, but nightly-2026-08-15
       does -- see `dylints/platform_boundary/rust-toolchain.toml`'s
       comment and zackees/clud's working `_dylint.yml` for the working
       pattern this mirrors). MUST equal every Dylint library's own pinned
