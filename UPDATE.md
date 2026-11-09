@@ -39,7 +39,8 @@ guidance, walk this checklist so nothing rots out of sync.
 ## Architecture
 
 6. Update [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) if crate or
-   package responsibilities changed.
+   package responsibilities changed. `ghd-core` owns the local-only
+   `ghd attest stamp` writer; preserve compatibility with ci-lint v1 stamps.
 
 ## Release flow
 

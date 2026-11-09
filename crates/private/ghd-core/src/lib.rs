@@ -14,6 +14,7 @@
 
 pub(crate) use ghd_platform as platform;
 
+mod attest;
 pub mod cli;
 pub mod client;
 pub mod endpoint;
