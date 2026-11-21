@@ -95,9 +95,9 @@ bounds what the workflow may do and how it plans each run.
 
 ```bash
 python3 ci/local.py precheck                  # ~0.5s warm; ~1-2s cold (clones .ci-lint/ once)
-python3 ci/local.py act                       # precheck, then the complete PR workflow via Bosn -> act2
-python3 ci/local.py act --lanes fast          # selected-job diagnostic
-python3 ci/local.py act --title "[ci-full] …" # exercise a different tag selection
+python3 ci/local.py act                       # precheck, then the local gate lanes (precheck, fast via Bosn -> act2; lint via host soldr lint)
+python3 ci/local.py act --lanes fast          # selected-job diagnostic (lint jobs refused: lint never runs under Bosn)
+python3 ci/local.py act --title "[ci-full] …" --lanes fast # exercise a different tag selection
 ```
 
 `precheck` wraps the exact command below, resolving `<ci.yml checkout>`
@@ -117,11 +117,15 @@ automatically; run it by hand to iterate faster than the hook's
 edit-triggered cadence.
 
 `act` requires a published Bosn CLI with its supervised CI runner on PATH.
-The default calls the pinned shared `ci-lint local-gate run`. Its declaration
-in `local-gate.toml` calls
-`bosn ci run --workflow .github/workflows/ci.yml --trigger pr --wait --json`
-without a job filter, so precheck, fast (build, tests and installed wheel),
-Dylint and CI OK run as one original workflow. The shared tool validates
+The default calls the pinned shared `ci-lint local-gate run`. Every lane
+in `local-gate.toml` is `ci/local_gate.py --lane <id>`: `precheck` and
+`fast` replay their ci.yml job through
+`bosn ci run --workflow .github/workflows/ci.yml --trigger pr --wait --json --job <id>`,
+and `lint` runs `soldr lint rust --check --cross-dylint` on the host
+(rustfmt check, Clippy on the host and every declared target, and the
+`dylints/` libraries on every declared target -- what the remote `dylint`
+job covers). **Lint never runs under Bosn**; `--lanes dylint` is refused
+and there is no whole-workflow full-run shortcut. The shared tool validates
 qualified execution evidence and writes tree/parent/input-bound commit
 trailers only after success. Repeating an unchanged qualified local run may
 reuse its fresh lane receipts. Start from a clean committed tree.
@@ -138,7 +142,7 @@ Unattested developer heads remain allowed in the pilot and run remotely
 binary, frozen Git snapshot, isolated Docker engine, action/cache storage,
 logs and cleanup. The legacy host-socket `act-run` stack is no longer used.
 `--lanes` requests selected-job diagnostics, never a full PR proof.
-`--title` is passed as `--pr-title` to Bosn's event adapter. Native coverage
+`--title` (with `--lanes`) is passed as `--pr-title` to Bosn's event adapter. Native coverage
 selected by that title remains required; unsupported runners must fail
 rather than being reported as passed. Ordinary PRs retain their existing
 coverage and release validation remains the original full release workflow.

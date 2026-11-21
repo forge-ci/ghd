@@ -83,6 +83,11 @@ targets = [
 [workspace.metadata.dylint]
 libraries = [{ path = "dylints/platform_boundary" }]
 
+# `soldr lint` (the local-gate `lint` lane; lint never runs under Bosn):
+# rustfmt check, Clippy, then every Dylint library declared above.
+[workspace.metadata.soldr.lint]
+steps = ["fmt", "clippy", "dylint"]
+
 # Bridge until kernal-api 0.1.32 (first release with `http-client-rustls`) is
 # on crates.io: remove this table once it is published. Pinned to an exact
 # kernal-api main commit.

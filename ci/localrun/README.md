@@ -81,9 +81,11 @@ Two independent gotchas this module handles:
   instead, so it can never be fooled by a stale or synthetic index
   record -- only the retired-family *key* check reads the index.
 
-## Resolved: `dylint` lane green under act (zackees/ci.yml#47)
+## Historical: `dylint` lane green under act (zackees/ci.yml#47)
 
-As of round M2-24, `python3 ci/local.py act --lanes dylint` passes end
+Lint no longer runs under Bosn/act: the local gate's `lint` lane runs
+host `soldr lint` and `ci/local.py act --lanes dylint` is refused. Kept
+for the root-cause record: as of round M2-24, `python3 ci/local.py act --lanes dylint` passes end
 to end -- see `ci/docker/act/README.md`'s "What a local run actually
 exercises today" for the evidence table and the three defects fixed to
 get there (a linked-git-worktree job-container mount gap in

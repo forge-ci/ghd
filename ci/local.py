@@ -4,9 +4,9 @@
 zackees/ci.yml#6 section 11 ("bosn -> act: local CI is first class").
 
     python3 ci/local.py precheck              # ~seconds; the agent Stop-hook / pre-push gate
-    python3 ci/local.py act                   # precheck, then the complete PR workflow via Bosn -> act2
-    python3 ci/local.py act --lanes fast      # selected-job diagnostic
-    python3 ci/local.py act --title "[ci-full] ..."  # exercise a different tag selection
+    python3 ci/local.py act                   # precheck, then the local gate lanes (lint via host soldr lint)
+    python3 ci/local.py act --lanes fast      # selected-job diagnostic (lint jobs refused)
+    python3 ci/local.py act --title "[ci-full] ..." --lanes fast  # a different tag selection
 
 All logic lives in `ci/localrun/` (stdlib only, except where it shells
 out to `uv run --no-project --with pyyaml` for `ci_lint` itself, which
@@ -60,12 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_precheck.set_defaults(func=_cmd_precheck)
 
     p_act = sub.add_parser(
-        "act", help="precheck, then the complete PR workflow through Bosn -> act2"
+        "act",
+        help="precheck, then the local gate lanes (lint never runs under Bosn)",
     )
     p_act.add_argument(
         "--lanes",
         default=None,
-        help="comma-separated job IDs for diagnostics (default: complete PR workflow)",
+        help="comma-separated non-lint job IDs for Bosn diagnostics (default: local gate)",
     )
     p_act.add_argument(
         "--title", default=None, help="PR title driving the act event (tags -> plan)"

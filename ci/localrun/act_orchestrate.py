@@ -1,10 +1,15 @@
 """Run the original PR workflow through Bosn's supervised, pinned act2.
 
 The default calls the pinned shared ci-lint gate, which submits the complete
-workflow, including precheck, build/test/wheel checks, Dylint and CI OK,
-then validates execution evidence before writing commit trailers. Explicit lane selection is diagnostic
-and never represents whole-workflow coverage. Bosn owns event construction,
-frozen checkout, isolated engines, cache storage, logs and cleanup.
+declared lanes (ci/local_gate.py): precheck and fast replayed under Bosn,
+and lint (`soldr lint`) on the host, then validates execution evidence before
+writing commit trailers. Explicit job selection is diagnostic and never
+represents whole-workflow coverage. Bosn owns event construction, frozen
+checkout, isolated engines, cache storage, logs and cleanup.
+
+Lint never runs under Bosn: lint jobs cannot be selected here, and a
+title-only run (which would replay the whole workflow, `dylint` included)
+must name its jobs with `--lanes`.
 """
 
 from __future__ import annotations
@@ -17,6 +22,10 @@ from ci.localrun.ci_lint_checkout import pinned_sha
 from ci.localrun.precheck import run_precheck
 
 WORKFLOW = ".github/workflows/ci.yml"
+
+# Workflow jobs that lint; they run on the host through `soldr lint`
+# (`python ci/local_gate.py --lane lint`), never under Bosn.
+LINT_JOBS = frozenset({"dylint"})
 
 
 def run_act(repo_root: Path, *, lanes_arg: str | None, title: str) -> int:
@@ -42,20 +51,31 @@ def run_act(repo_root: Path, *, lanes_arg: str | None, title: str) -> int:
             check=False,
         ).returncode
 
-    jobs: list[str | None] = [None]
-    if lanes_arg is not None:
-        selected = [value.strip() for value in lanes_arg.split(",")]
-        if any(not value for value in selected) or len(set(selected)) != len(selected):
-            print(
-                "[ci/local.py] lanes must be distinct nonempty job IDs", file=sys.stderr
-            )
-            return 1
-        jobs = []
-        jobs.extend(selected)
+    if lanes_arg is None:
         print(
-            "[ci/local.py] selected-job diagnostics; complete PR coverage requires the default run",
+            "[ci/local.py] --title needs --lanes: a whole-workflow Bosn replay "
+            "would run the dylint job, and lint never runs under Bosn",
             file=sys.stderr,
         )
+        return 1
+
+    selected = [value.strip() for value in lanes_arg.split(",")]
+    if any(not value for value in selected) or len(set(selected)) != len(selected):
+        print("[ci/local.py] lanes must be distinct nonempty job IDs", file=sys.stderr)
+        return 1
+    lint_jobs = sorted(LINT_JOBS.intersection(selected))
+    if lint_jobs:
+        print(
+            f"[ci/local.py] {', '.join(lint_jobs)}: lint never runs under Bosn; "
+            "use python ci/local_gate.py --lane lint (soldr lint)",
+            file=sys.stderr,
+        )
+        return 1
+    jobs = selected
+    print(
+        "[ci/local.py] selected-job diagnostics; complete PR coverage requires the default run",
+        file=sys.stderr,
+    )
 
     for job in jobs:
         command = [
@@ -72,10 +92,9 @@ def run_act(repo_root: Path, *, lanes_arg: str | None, title: str) -> int:
         ]
         if title:
             command.extend(["--pr-title", title])
-        if job is not None:
-            command.extend(["--job", job])
+        command.extend(["--job", job])
         print(
-            f"[ci/local.py] Bosn → act2: {job or 'complete PR workflow'}",
+            f"[ci/local.py] Bosn → act2: {job}",
             file=sys.stderr,
         )
         try:

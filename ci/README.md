@@ -2,7 +2,9 @@
 
 
 Local PR validation uses `python3 ci/local.py act`: a cheap precheck followed
-by the complete original workflow through `bosn ci run` and pinned act2.
+by the local gate lanes (`ci/local_gate.py`): `precheck` and `fast` through
+`bosn ci run` and pinned act2, and `lint` through host `soldr lint` (lint
+never runs under Bosn).
 Selected `--lanes` runs are diagnostics. Preserve remote-selected native
 coverage and full release validation; neither is waived by this entry point.
 

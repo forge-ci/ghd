@@ -1,25 +1,30 @@
 # Shared CI tool consumer: protocol implementation lives in zackees/ci.yml.
-# The default run remains the complete original PR workflow under Bosn -> act2.
+# Every lane is `ci/local_gate.py --lane <id>`: `precheck` and `fast` replay
+# their ci.yml job under Bosn -> act2; `lint` runs `soldr lint` on the host.
+# Lint never runs under Bosn (no dylint/clippy/fmt job replay), so there is
+# no whole-workflow `[gate.full-run]` shortcut either: it would replay the
+# `dylint` job in a container.
 [gate]
-run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json"]
+run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py"]
 verify = "ci.yml:verify"
 mode = "shadow"
 
-[gate.full-run]
-receipt = "lane-passes-v1"
-min-misses = 2
-
 [gate.lanes.precheck]
-run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "precheck"]
+run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "precheck"]
 tools = ["bosn", "docker", "uv", "python"]
 
 [gate.lanes.fast]
-run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "fast"]
+run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "fast"]
 tools = ["bosn", "docker", "uv", "python"]
 
-[gate.lanes.dylint]
-run = ["bosn", "ci", "run", "--workspace", ".", "--workflow", ".github/workflows/ci.yml", "--trigger", "pr", "--wait", "--json", "--job", "dylint"]
-tools = ["bosn", "docker", "uv", "python"]
+# Host `soldr lint` (ci/local_gate.py): rustfmt check, Clippy on the host and
+# every `[workspace.metadata.soldr].targets` triple, and every Dylint library
+# in `[workspace.metadata.dylint]`; `--cross-dylint` repeats the Dylint pass
+# per declared cross target, which is what the remote `ci.yml:dylint` job
+# (ci/dylint.py multi-target) covers.
+[gate.lanes.lint]
+run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "lint"]
+tools = ["soldr", "uv"]
 
 [gate.replay]
 repository = "forge-ci/ghd"
@@ -39,32 +44,27 @@ lane = "fast"
 job = "fast"
 event = "pull_request"
 
-[[gate.replay.selections]]
-lane = "dylint"
-job = "dylint"
-event = "pull_request"
-
 [[gate.replay.jobs]]
 source-job = "ci.yml:verify"
-capture-outputs = ["skip_fast", "skip_dylint"]
-lanes = ["precheck", "fast", "dylint"]
+capture-outputs = ["skip_fast"]
+lanes = ["precheck", "fast"]
 
 [[gate.replay.jobs]]
 source-job = "ci-pre.yml:precheck"
-capture-outputs = ["cache_save", "fast_reused", "dylint_reused", "fast_suites_json"]
-lanes = ["precheck", "fast", "dylint"]
+capture-outputs = ["cache_save", "fast_reused", "fast_suites_json"]
+lanes = ["precheck", "fast"]
 
 [[gate.replay.jobs]]
 source-job = "ci-pre.yml:cache-budget"
-lanes = ["precheck", "fast", "dylint"]
+lanes = ["precheck", "fast"]
 
 [[gate.replay.jobs]]
 source-job = "ci-pre.yml:cache-janitor"
-lanes = ["precheck", "fast", "dylint"]
+lanes = ["precheck", "fast"]
 
 [[gate.replay.jobs]]
 source-job = "ci.yml:cache-maint"
-lanes = ["fast", "dylint"]
+lanes = ["fast"]
 
 [[gate.replay.jobs]]
 source-job = "ci.yml:reuse-decision"
@@ -74,14 +74,10 @@ lanes = ["fast"]
 source-job = "ci.yml:fast"
 lanes = ["fast"]
 
-[[gate.replay.jobs]]
-source-job = "ci.yml:dylint"
-lanes = ["dylint"]
-
 [gate.trust]
 mode = "enforce"
 skip = ["ci.yml:fast", "ci.yml:dylint"]
-covered-by = { "ci.yml:fast" = ["fast"], "ci.yml:dylint" = ["dylint"] }
+covered-by = { "ci.yml:fast" = ["fast"], "ci.yml:dylint" = ["lint"] }
 surfaces = ["ci/**"]
 audit-rate = 10
 full-labels = ["ci-cache-save", "ci-full", "ci-linux", "ci-linux-arm64", "ci-linux-arm64-musl", "ci-linux-x64", "ci-linux-x64-musl", "ci-macos", "ci-macos-arm64", "ci-macos-x64", "ci-perf", "ci-perf-linux", "ci-perf-macos", "ci-perf-windows", "ci-test", "ci-test-init", "ci-test-integration", "ci-test-perf", "ci-test-smoke", "ci-test-unit", "ci-windows", "ci-windows-arm64", "ci-windows-x64", "ci:full", "no-test", "no-test-init", "no-test-integration", "no-test-perf", "no-test-smoke", "no-test-unit", "release"]
