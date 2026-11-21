@@ -17,14 +17,15 @@ tools = ["bosn", "docker", "uv", "python"]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "fast"]
 tools = ["bosn", "docker", "uv", "python"]
 
-# Host `soldr lint` (ci/local_gate.py): rustfmt check, Clippy on the host and
-# every `[workspace.metadata.soldr].targets` triple, and every Dylint library
-# in `[workspace.metadata.dylint]`; `--cross-dylint` repeats the Dylint pass
-# per declared cross target, which is what the remote `ci.yml:dylint` job
-# (ci/dylint.py multi-target) covers.
+# Host lint (ci/local_gate.py): `soldr lint` (rustfmt check, Clippy on the
+# host and every `[workspace.metadata.soldr].targets` triple, every Dylint
+# library in `[workspace.metadata.dylint]` per declared target via
+# `--cross-dylint`), then ruff and pylint through uv. That is every check of
+# the remote `ci.yml:dylint` job, the repository's lint job; the replayed
+# `fast` job runs none of them.
 [gate.lanes.lint]
 run = ["uv", "run", "--no-project", "--python", "3.13", "python", "ci/local_gate.py", "--lane", "lint"]
-tools = ["soldr", "uv"]
+tools = ["soldr", "uv", "python"]
 
 [gate.replay]
 repository = "forge-ci/ghd"

@@ -8,12 +8,15 @@ lane exist:
   Bosn -> act2 (`bosn ci run ... --job <id> --json`). The process is
   replaced by Bosn, so its `--json` report reaches stdout untouched for the
   `[gate.replay]` evidence check.
-* `lint` runs `soldr lint` on the host. Lint never runs under Bosn: a
-  container replay's caching semantics break this machine, so formatting,
-  Clippy (host plus every `[workspace.metadata.soldr].targets` triple) and
-  every Dylint library (`[workspace.metadata.dylint]`, also per declared
-  cross target via `--cross-dylint`) run through the host's `soldr lint`.
-  That covers what the remote `ci.yml:dylint` job (ci/dylint.py) checks.
+* `lint` runs on the host. Lint never runs under Bosn: a container
+  replay's caching semantics break this machine. `soldr lint` covers
+  formatting, Clippy (host plus every `[workspace.metadata.soldr].targets`
+  triple) and every Dylint library (`[workspace.metadata.dylint]`, also
+  per declared cross target via `--cross-dylint`); ruff and pylint then run
+  through uv exactly as `./ci.py ruff` / `./ci.py pylint` do, after
+  `ci/fast.py python-sync` builds `_native` for pylint. Together that is
+  every check the remote `ci.yml:dylint` job (the repository's lint job)
+  runs, and the Bosn-replayed `fast` job runs none of them.
 
 With no `--lane`, every lane runs in declaration order and the first failure
 stops the run.
@@ -33,27 +36,51 @@ LINT_LANE = "lint"
 LANES = (*BOSN_LANES, LINT_LANE)
 
 
-def lane_command(lane: str) -> list[str]:
-    """The argv one lane runs."""
+LINT_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("soldr", "lint", "rust", "--check", "--cross-dylint"),
+    ("python3", "ci/gates/ruff.py"),
+    ("python3", "ci/fast.py", "python-sync"),
+    ("python3", "ci/gates/pylint.py"),
+)
+
+
+def lane_commands(lane: str) -> list[list[str]]:
+    """The argv list one lane runs, in order; the first failure stops it."""
     if lane == LINT_LANE:
-        return ["soldr", "lint", "rust", "--check", "--cross-dylint"]
+        return [list(command) for command in LINT_COMMANDS]
     if lane in BOSN_LANES:
         return [
-            "bosn",
-            "ci",
-            "run",
-            "--workspace",
-            ".",
-            "--workflow",
-            WORKFLOW,
-            "--trigger",
-            "pr",
-            "--wait",
-            "--json",
-            "--job",
-            lane,
+            [
+                "bosn",
+                "ci",
+                "run",
+                "--workspace",
+                ".",
+                "--workflow",
+                WORKFLOW,
+                "--trigger",
+                "pr",
+                "--wait",
+                "--json",
+                "--job",
+                lane,
+            ]
         ]
     raise ValueError(f"unknown lane {lane!r}; expected one of {', '.join(LANES)}")
+
+
+def _run_lane(lane: str) -> int:
+    for command in lane_commands(lane):
+        print(f"[local_gate] {lane}: {' '.join(command)}", file=sys.stderr)
+        sys.stderr.flush()
+        try:
+            returncode = subprocess.run(command, check=False).returncode
+        except OSError as error:
+            print(f"[local_gate] cannot start {command[0]}: {error}", file=sys.stderr)
+            return 1
+        if returncode != 0:
+            return returncode
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,8 +88,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", choices=LANES, default=None)
     args = parser.parse_args(argv)
 
-    if args.lane is not None:
-        command = lane_command(args.lane)
+    if args.lane in BOSN_LANES:
+        # Replace this process so Bosn's `--json` report reaches stdout
+        # untouched for the `[gate.replay]` evidence check.
+        (command,) = lane_commands(args.lane)
         print(f"[local_gate] {args.lane}: {' '.join(command)}", file=sys.stderr)
         sys.stderr.flush()
         try:
@@ -71,14 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[local_gate] cannot start {command[0]}: {error}", file=sys.stderr)
             return 1
 
-    for lane in LANES:
-        command = lane_command(lane)
-        print(f"[local_gate] {lane}: {' '.join(command)}", file=sys.stderr)
-        try:
-            returncode = subprocess.run(command, check=False).returncode
-        except OSError as error:
-            print(f"[local_gate] cannot start {command[0]}: {error}", file=sys.stderr)
-            return 1
+    for lane in (args.lane,) if args.lane else LANES:
+        returncode = _run_lane(lane)
         if returncode != 0:
             return returncode
     return 0

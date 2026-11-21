@@ -1,6 +1,6 @@
 """Python static analysis via pylint.
 
-zackees/ci.yml#6 round-4B (GEN-004): the fast lane runs `pylint` over
+zackees/ci.yml#6 round-4B (GEN-004): the `dylint` (lint) job runs `pylint` over
 `src/`, `ci/`, `tests/`, `action/` -- a different signal than ruff's
 (ruff catches unused imports/shadowing/unsorted imports fast; pylint
 adds cross-module checks ruff doesn't do: unresolved attribute access,

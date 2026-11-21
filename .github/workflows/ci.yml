@@ -343,28 +343,9 @@ jobs:
           PYTHONPATH: .ci-lint
         run: python3 ci/cache_delta.py apply --build-cache-path "${{ steps.setup-soldr.outputs.build-cache-path }}" --delta-archive "${{ steps.delta-prep.outputs.delta-archive-path }}" --base-manifest "${{ steps.delta-prep.outputs.base-manifest-path }}"
 
-      - name: fmt
-        run: ./ci.py fmt
-
-      - name: clippy
-        run: ./ci.py clippy
-
-      # ci-lint's GEN-004 scans this job's `run:` lines by their literal
-      # shell tokens (a `python3 ci/<x>.py` line is followed one level
-      # into that script's own literal `subprocess.run([...])` argv --
-      # ci/gates/ruff.py's variable-built `cmd` list, and its pinned
-      # RUFF_PIN constant, are each NOT a literal at that call site, so
-      # GEN-004 cannot see through `./ci.py ruff`). These two steps are
-      # therefore the literal, GEN-004-visible form; `./ci.py ruff`
-      # (ci/gates/ruff.py, same RUFF_PIN/targets) stays available for
-      # local dev (`./ci.py all`) and must be kept in sync by hand if
-      # either changes.
-      - name: ruff check (GEN-004; import-sort I rules via pyproject.toml)
-        run: uv run --no-project --with ruff==0.15.18 ruff check --config pyproject.toml src tests ci action ci.py lint test install
-
-      - name: ruff format --check (GEN-004)
-        run: uv run --no-project --with ruff==0.15.18 ruff format --check --config pyproject.toml src tests ci action ci.py lint test install
-
+      # fmt, clippy, ruff and pylint run in the `dylint` job, not here: the
+      # local gate replays this job under Bosn, and lint never runs under
+      # Bosn (the host `lint` lane runs them through `soldr lint` + uv).
       - name: Build + capture compiler-artifact JSON
         run: python3 ci/fast.py build-json --out ${{ runner.temp }}/cargo-messages.jsonl
 
@@ -389,17 +370,10 @@ jobs:
         if: contains(fromJSON(needs.precheck.outputs.fast_suites_json), 'unit')
         run: python3 ci/fast.py rust-test
 
-      # Unconditional (unlike the pytest run below): `_native` must be
-      # built for `pylint`'s `--extension-pkg-allow-list` regardless of
-      # whether the `unit` suite itself is selected.
-      - name: Sync Python env (builds `_native` for pylint + packaging)
+      # Unconditional (unlike the pytest run below): packaging and the
+      # integration suite reuse this editable install.
+      - name: Sync Python env (builds `_native` for packaging)
         run: python3 ci/fast.py python-sync
-
-      # Same GEN-004 note as the ruff steps above: this is the literal,
-      # AST-visible form; `./ci.py pylint` (ci/gates/pylint.py, same
-      # PYLINT_PIN/targets/allow-list) stays available for local dev.
-      - name: pylint (GEN-004)
-        run: uv run --no-project --with pylint==4.0.9 --with pytest python3 -m pylint src ci tests action --extension-pkg-allow-list=ghd._native
 
       - name: Run Python tests (unit suite, when selected)
         if: contains(fromJSON(needs.precheck.outputs.fast_suites_json), 'unit')
@@ -492,6 +466,49 @@ jobs:
           # Round-4C (ci.yml#6 §6 D3): see the `fast` job's Setup soldr
           # step for what this measured (correct, but not faster here).
           preserve-source-mtimes: "false"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          save-cache: ${{ needs.precheck.outputs.cache_save }}
+          cache-suffix: ${{ needs.precheck.outputs.cache_save == 'true' && needs.precheck.outputs.cache_key_pr || '' }}
+
+      # The repository's remote lint job: the plan requires `dylint`, so
+      # fmt, clippy, ruff and pylint live here too, never in the
+      # Bosn-replayed `fast` job. The local gate's host `lint` lane
+      # (ci/local_gate.py: `soldr lint` + ruff/pylint via uv) attests it.
+      - name: fmt
+        run: ./ci.py fmt
+
+      - name: clippy
+        run: ./ci.py clippy
+
+      # ci-lint's GEN-004 scans this job's `run:` lines by their literal
+      # shell tokens (a `python3 ci/<x>.py` line is followed one level
+      # into that script's own literal `subprocess.run([...])` argv --
+      # ci/gates/ruff.py's variable-built `cmd` list, and its pinned
+      # RUFF_PIN constant, are each NOT a literal at that call site, so
+      # GEN-004 cannot see through `./ci.py ruff`). These two steps are
+      # therefore the literal, GEN-004-visible form; `./ci.py ruff`
+      # (ci/gates/ruff.py, same RUFF_PIN/targets) stays available for
+      # local dev (`./ci.py all`) and must be kept in sync by hand if
+      # either changes.
+      - name: ruff check (GEN-004; import-sort I rules via pyproject.toml)
+        run: uv run --no-project --with ruff==0.15.18 ruff check --config pyproject.toml src tests ci action ci.py lint test install
+
+      - name: ruff format --check (GEN-004)
+        run: uv run --no-project --with ruff==0.15.18 ruff format --check --config pyproject.toml src tests ci action ci.py lint test install
+
+      # `_native` must be importable for pylint's
+      # `--extension-pkg-allow-list`.
+      - name: Sync Python env (builds `_native` for pylint)
+        run: python3 ci/fast.py python-sync
+
+      # Same GEN-004 note as the ruff steps: this is the literal,
+      # AST-visible form; `./ci.py pylint` (ci/gates/pylint.py, same
+      # PYLINT_PIN/targets/allow-list) stays available for local dev.
+      - name: pylint (GEN-004)
+        run: uv run --no-project --with pylint==4.0.9 --with pytest python3 -m pylint src ci tests action --extension-pkg-allow-list=ghd._native
 
       - name: Install aarch64 Linux cross gcc (ring's C build)
         run: python3 ci/install_cross_gcc.py

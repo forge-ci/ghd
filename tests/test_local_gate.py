@@ -35,13 +35,12 @@ def test_declared_lanes_match_script() -> None:
         assert lane["run"] == [*gate["run"], "--lane", lane_id]
 
 
-def test_lint_lane_runs_soldr_lint_on_host() -> None:
-    assert local_gate.lane_command("lint") == [
-        "soldr",
-        "lint",
-        "rust",
-        "--check",
-        "--cross-dylint",
+def test_lint_lane_runs_soldr_lint_and_python_lint_on_host() -> None:
+    assert local_gate.lane_commands("lint") == [
+        ["soldr", "lint", "rust", "--check", "--cross-dylint"],
+        ["python3", "ci/gates/ruff.py"],
+        ["python3", "ci/fast.py", "python-sync"],
+        ["python3", "ci/gates/pylint.py"],
     ]
     tools = _gate()["lanes"]["lint"]["tools"]
     assert "soldr" in tools
@@ -50,7 +49,7 @@ def test_lint_lane_runs_soldr_lint_on_host() -> None:
 
 @pytest.mark.parametrize("lane", local_gate.BOSN_LANES)
 def test_bosn_lanes_never_select_a_lint_job(lane: str) -> None:
-    command = local_gate.lane_command(lane)
+    (command,) = local_gate.lane_commands(lane)
     assert command[:3] == ["bosn", "ci", "run"]
     job = command[command.index("--job") + 1]
     assert job == lane
@@ -71,3 +70,31 @@ def test_act_refuses_lint_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(act_orchestrate, "run_precheck", lambda *_a, **_k: passed)
     assert act_orchestrate.run_act(tmp_path, lanes_arg="dylint", title="") == 1
     assert act_orchestrate.run_act(tmp_path, lanes_arg=None, title="[ci-full] x") == 1
+
+
+# `run:` fragments of every lint step; each must live in the `dylint` job
+# (attested by the host `lint` lane), never in the Bosn-replayed `fast` job.
+LINT_RUN_FRAGMENTS = (
+    "./ci.py fmt",
+    "./ci.py clippy",
+    "ruff check",
+    "ruff format --check",
+    "-m pylint",
+)
+
+
+def _run_lines(workflow: str, job: str, next_job: str) -> list[str]:
+    start = workflow.index(f"\n  {job}:\n")
+    end = workflow.index(f"\n  {next_job}:\n", start)
+    return [line for line in workflow[start:end].splitlines() if "run:" in line]
+
+
+def test_lint_steps_live_in_dylint_job_not_fast() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    fast = _run_lines(workflow, "fast", "dylint")
+    dylint = _run_lines(workflow, "dylint", "platform-build")
+    for fragment in LINT_RUN_FRAGMENTS:
+        assert not any(fragment in line for line in fast), fragment
+        assert any(fragment in line for line in dylint), fragment

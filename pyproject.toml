@@ -36,7 +36,7 @@ dev = [
     "ruff>=0.8.0",
 ]
 
-# ci.yml#6 round-4B (GEN-004): the fast lane runs `ruff check`, `ruff
+# ci.yml#6 round-4B (GEN-004): the `dylint` (lint) job runs `ruff check`, `ruff
 # format --check` and `pylint` over src/, ci/, tests/, action/ -- this
 # section is that config, read with `--config pyproject.toml` (never
 # `--isolated`, which would ignore this file too) by ci/gates/ruff.py.

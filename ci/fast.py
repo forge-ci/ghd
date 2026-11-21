@@ -14,6 +14,9 @@ Decisions this round made (see the PR body / worker report for evidence):
     the Dylint rule as permission to omit Clippy or formatting" — Clippy is
     Soldr-routed but its own required check, answering ci.yml#6's open
     question 3.
+    They (with ruff and pylint) now run in the `dylint` job, not `fast`:
+    the local gate replays `fast` under Bosn, and lint never runs under
+    Bosn (the host `lint` lane, ci/local_gate.py, covers them instead).
   - Build+test capture `--message-format=json` in a SEPARATE `--no-run`
     pass (`build-json`) so the file `ci_lint units`/`ci_lint tests size`
     read is pure JSON — cargo interleaves human test output with the

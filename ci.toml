@@ -285,10 +285,20 @@ pypi = { auth = "oidc", environment = "pypi", mode = "mock" }
 # The `ci.sh` GEN-005 exception (Gate launcher kept as a bash wrapper,
 # tracked by forge-ci/ghd#15) is RESOLVED: `ci.sh` is
 # removed and `./ci.py` is directly executable via its own PEP 723
-# shebang. No `[[exceptions]]` remain; precheck must show 0 exceptions.
+# shebang. The one `[[exceptions]]` entry is GEN-004 (below).
 
 # The two SEC-002 exceptions round-3B needed for `actions: read` (on
 # ci-pre.yml's precheck job and ci.yml's precheck-caller/ci-ok jobs)
 # are GONE as of round-4B: zackees/ci.yml@31369f5 makes `actions: read`
 # free at both the top level and per-job (the exact refinement the round-3B
 # worker report drafted upstream -- see that report and zackees/ci.yml#6).
+
+# Lint never runs under bosn (GATE-016): the local gate replays jobs.fast
+# under Bosn, so ruff/pylint (and fmt/clippy) run in the plan-required
+# dylint job and the host lint lane instead. GEN-004 hard-codes jobs.fast.
+[[exceptions]]
+rule    = "GEN-004"
+path    = ".github/workflows/ci.yml"
+reason  = "Lint never runs under bosn: ruff/pylint (with fmt/clippy) run in the plan-required dylint job and the host lint lane, because the local gate replays jobs.fast under bosn; GEN-004 hard-codes jobs.fast"
+issue   = "https://github.com/forge-ci/ghd/issues/41"
+expires = "2026-12-31"
