@@ -56,7 +56,11 @@ any `docker build` call) -- confirmed by a second `python3 ci/local.py
 act --lanes fast` completing its `bosn run --task act-run` round trip
 in 3.5s total, versus 61.7s cold.
 
-## What a local run actually exercises today
+## What a local run actually exercised (historical)
+
+Lint no longer runs under Bosn/act: `--lanes dylint` is now refused and
+the local gate's `lint` lane runs host `soldr lint`. The record below is
+kept for its root-cause evidence.
 
 `python3 ci/local.py act --lanes dylint` runs the real `dylint` job (and
 its `ci-pre.yml`-reusable `precheck` dependency) end to end in an

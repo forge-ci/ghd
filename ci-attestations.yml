@@ -5,7 +5,7 @@ gates:
   rust/x86_64-unknown-linux-gnu/fast: {lane: fast}
   python/all/fast: {lane: fast}
   general/x86_64-unknown-linux-gnu/wheel-install: {lane: fast}
-  rust/all/dylint: {lane: dylint}
+  rust/all/dylint: {lane: lint}
 jobs:
   ci.yml:fast:
     - rust/x86_64-unknown-linux-gnu/fast
