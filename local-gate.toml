@@ -71,6 +71,10 @@ source-job = "ci.yml:reuse-decision"
 lanes = ["fast"]
 
 [[gate.replay.jobs]]
+source-job = "ci.yml:pool"
+lanes = ["fast"]
+
+[[gate.replay.jobs]]
 source-job = "ci.yml:fast"
 lanes = ["fast"]
 
