@@ -35,8 +35,8 @@ ever succeeded). Round 2 added it back, this time generated to match
 - `ci.toml` at the repo root is the exact platform/suite/tag/cache
   contract those two workflow files implement — nothing is hand-written
   into YAML that `ci.toml` already declares.
-- `./ci.py all` locally runs the same gate set the `fast` job's fmt/
-  clippy steps call.
+- `./ci.py all` locally runs the same gate set the `dylint` job's fmt/
+  clippy/ruff/pylint steps call.
 - `python3 -m ci_lint precheck --repo . --local` is the same check
   `ci-pre.yml` runs, and this repo's agent Stop-hook / pre-push gate.
 

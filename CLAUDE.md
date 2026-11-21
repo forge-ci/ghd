@@ -121,11 +121,13 @@ The default calls the pinned shared `ci-lint local-gate run`. Every lane
 in `local-gate.toml` is `ci/local_gate.py --lane <id>`: `precheck` and
 `fast` replay their ci.yml job through
 `bosn ci run --workflow .github/workflows/ci.yml --trigger pr --wait --json --job <id>`,
-and `lint` runs `soldr lint rust --check --cross-dylint` on the host
+and `lint` runs on the host: `soldr lint rust --check --cross-dylint`
 (rustfmt check, Clippy on the host and every declared target, and the
-`dylints/` libraries on every declared target -- what the remote `dylint`
-job covers). **Lint never runs under Bosn**; `--lanes dylint` is refused
-and there is no whole-workflow full-run shortcut. The shared tool validates
+`dylints/` libraries on every declared target), then ruff and pylint via
+uv -- every check of the remote `dylint` job, which is the repository's
+lint job. **Lint never runs under Bosn**: the replayed `fast` job holds no
+fmt/clippy/ruff/pylint step, `--lanes dylint` is refused, and there is no
+whole-workflow full-run shortcut. The shared tool validates
 qualified execution evidence and writes tree/parent/input-bound commit
 trailers only after success. Repeating an unchanged qualified local run may
 reuse its fresh lane receipts. Start from a clean committed tree.
@@ -147,7 +149,8 @@ selected by that title remains required; unsupported runners must fail
 rather than being reported as passed. Ordinary PRs retain their existing
 coverage and release validation remains the original full release workflow.
 
-The `dylint` job's own logic lives in `ci/dylint.py` (host + every
+The `dylint` job is also the remote lint job (fmt, clippy, ruff, pylint
+steps, then Dylint); its Dylint logic lives in `ci/dylint.py` (host + every
 declared cross target, one Linux job — `soldr dylint prepare --target T`
 then `soldr cargo dylint`, never a bare `cargo`/`cargo-dylint` call). The
 `fast` job's logic lives in `ci/fast.py`. `.github/actions/soldr/` is the
