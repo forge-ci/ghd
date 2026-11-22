@@ -233,3 +233,5 @@ Agent and review guidance from zackees/ci.yml `docs/policy-rust.md` ("Design pri
 - Architecture → [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 - Release flow → [docs/RELEASE.md](./docs/RELEASE.md)
 - Linting policy → [LINTING.md](./LINTING.md)
+
+Pushes from clud sessions are gated by `pr_checks` (talos-hq/clud#2720): run `clud pr-check` before pushing; it runs `uv run --no-project --python 3.13 python ci/local_gate.py --lane lint` on the host (soldr formatting, Clippy and Dylint, then Ruff and Pylint).
