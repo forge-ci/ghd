@@ -15,6 +15,7 @@ usage:
                                                       understands it, else the real gh
   ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
   ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
+  ghd attest stamp --evidence <path|-> [--dry-run] [--lane <lane>]
   ghd stats                                           what the daemon saved
   ghd daemon                                          run the daemon (auto-started)
   ghd --version | --help";
@@ -26,6 +27,7 @@ pub fn run(args: &[String]) -> io::Result<ExitCode> {
     match args.as_slice() {
         [] | ["--help" | "-h" | "help"] => done(print(USAGE)),
         ["--version" | "-V"] => done(print(&version_banner())),
+        ["attest", "stamp", rest @ ..] => done(crate::attest::run(rest)),
         ["stats"] => done(stats()),
         ["gh", rest @ ..] => gh_compatible(rest),
         ["pr", "view", rest @ ..] => done(pr_view(rest)),

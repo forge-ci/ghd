@@ -90,6 +90,7 @@ ghd gh <gh args...>                                 a drop-in gh: native when gh
                                                     understands it, else the real gh
 ghd pr view <number> [-R owner/repo] --json f1,f2   like `gh pr view --json`
 ghd api graphql -f query=... [-f k=v] [-F k=v]      like `gh api graphql`
+ghd attest stamp --evidence <path|-> [--dry-run] [--lane <lane>]
 ghd stats                                           what the daemon saved
 ghd daemon                                          run the daemon (auto-started)
 ghd --version | --help
@@ -122,6 +123,16 @@ ghd --version | --help
 - Mutations always go upstream and clear the query cache, so no read
   returns data from before a write.
 - A body with `errors` is printed and the command exits 1, as with gh.
+
+**`ghd attest stamp`** reads soldr v1 porcelain from a file or stdin and
+amends HEAD with one canonical `Ci-Attestation` trailer per successful gate.
+It refuses dirty trees, mismatched trees, unsupported schemas and evidence
+with no successful gates. Existing message text and trailers are preserved.
+`--dry-run` prints the trailers without amending. `--lane` defaults to `lint`;
+set it to the lane declared for these gates in `ci-attestations.yml`. A single
+evidence object must contain gates from that lane. This command uses local
+git only; it never contacts the daemon or GitHub. Keep evidence outside the
+repository to avoid making the tree dirty.
 
 **`ghd stats`** prints the daemon's counters as JSON: `reads`,
 `served_fresh`, `sentinel_304_free`, `sentinel_200`, `graphql_queries`,

@@ -76,6 +76,10 @@ Load-bearing pieces:
 - reaches the OS only via `crate::platform::*` (aliased from
   `ghd-platform`)
 - the unit of behavior consistency between the CLI and Python surfaces
+- `attest` reads soldr v1 evidence and amends local commit trailers without
+  a daemon round-trip; kernal-api owns JSON encoding and SHA-256. The wire
+  stamp matches ci.yml `24362f3e` (sorted compact ASCII JSON, tree and
+  comma-joined parents, SHA-256 truncated to 32 hex characters).
 
 ### `crates/private/ghd-daemon`
 
