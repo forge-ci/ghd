@@ -231,7 +231,11 @@ jobs:
         id: select
         uses: forge-ci/ci.yml/actions/pool-select@a36bc81ad6ada5fb17398e3e7ba38435cc67a951 # ci.yml#550, tokenless signal source
         with:
-          labels: ${{ vars.FORGE_POOL_LABELS }}
+          # RUN-005 (forge-ci/signal.forge-ci.com loops/dynamic-pool): a
+          # same-repo PR labeled `forge-pool` forces the pool labels so the
+          # pool lane is proven before FORGE_POOL_LABELS is set (ghd#43).
+          # Applying a label needs triage access; forks stay hosted.
+          labels: ${{ vars.FORGE_POOL_LABELS || (contains(github.event.pull_request.labels.*.name, 'forge-pool') && '["self-hosted","forge-pool"]' || '') }}
           fallback: ubuntu-24.04
 
   fast:
