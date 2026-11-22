@@ -1,7 +1,8 @@
 {
   "pr_checks": {
     "commands": [
-      "uv run --no-project --python 3.13 python ci/local_gate.py --lane lint"
+      "./lint",
+      "uv run --no-project --python 3.13 python ci/dylint.py"
     ]
   }
 }
