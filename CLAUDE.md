@@ -233,3 +233,5 @@ Agent and review guidance from zackees/ci.yml `docs/policy-rust.md` ("Design pri
 - Architecture → [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 - Release flow → [docs/RELEASE.md](./docs/RELEASE.md)
 - Linting policy → [LINTING.md](./LINTING.md)
+
+Pushes from clud sessions are gated by `pr_checks` (talos-hq/clud#2720): run `clud pr-check` before pushing; it runs `./ci.py fmt` (Rust formatting) and `./ci.py ruff` (Python lint and formatting) on the host. The combined host lint lane fails on its Soldr flags (forge-ci/ghd#45); Clippy and Dylint are deferred after exceeding five-minute host budgets (forge-ci/ghd#46 and forge-ci/ghd#47), so this gate does not yet validate Rust compilation or Dylint.
