@@ -234,4 +234,4 @@ Agent and review guidance from zackees/ci.yml `docs/policy-rust.md` ("Design pri
 - Release flow → [docs/RELEASE.md](./docs/RELEASE.md)
 - Linting policy → [LINTING.md](./LINTING.md)
 
-Pushes from clud sessions are gated by `pr_checks` (talos-hq/clud#2720): run `clud pr-check` before pushing; it runs `./lint` (formatting, Clippy with `-D warnings`, Ruff), then `uv run --no-project --python 3.13 python ci/dylint.py` on the host.
+Pushes from clud sessions are gated by `pr_checks` (talos-hq/clud#2720): run `clud pr-check` before pushing; it runs `./ci.py fmt`, then `./ci.py ruff`, then `uv run --no-project --python 3.13 python ci/dylint.py` on the host. The combined host lint lane is omitted for forge-ci/ghd#45; Clippy is deferred after exceeding the five-minute host budget.
