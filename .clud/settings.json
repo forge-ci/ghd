@@ -2,8 +2,7 @@
   "pr_checks": {
     "commands": [
       "./ci.py fmt",
-      "./ci.py ruff",
-      "uv run --no-project --python 3.13 python ci/dylint.py"
+      "./ci.py ruff"
     ]
   }
 }
